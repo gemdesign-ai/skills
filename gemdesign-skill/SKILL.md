@@ -1,7 +1,7 @@
 ---
 name: gemdesign-skill
 description: Generate, save, and modify GemDesign prototype pages via CLI. Invoke when user wants to create UI prototypes, design pages, or batch-generate pages from requirements.
-version: 0.1.0
+version: 0.1.1
 license: MIT
 compatibility: [claude, codex, cursor, trae, hermes, openclaw, qoder, opencode , workbuddy, qclaw]
 ---
@@ -78,6 +78,15 @@ After Step 1 (CLI installed) and Step 2 (Login verified) are both confirmed comp
 The local server provides real-time streaming preview of HTML pages as they are being generated. The server is built into the CLI and managed via the `gemdesign server` commands. The server runs on port `4056` by default; if that port is occupied it auto-retries the next available port (up to `4066`).
 
 1. **Start the local server** using the CLI command:
+
+   > **CRITICAL — If Step 1 updated the CLI, stop the old server first.** If you ran `npm update -g @gemdesign-ai/cli` in Step 1, any previously running server is still using the OLD CLI code. You MUST stop it before starting a new one, otherwise the new server code will not be loaded:
+   > ```bash
+   > gemdesign server stop
+   > ```
+   > - If it returns `{"success":true,"message":"本地服务已停止"}`, the old server has been stopped — continue to start a fresh server below.
+   > - If it returns an error like `{"success":false,"error":"未发现运行中的本地服务"}`, no server was running — ignore this error and continue.
+   > - **If Step 1 did NOT update the CLI** (CLI was already up-to-date), skip the stop command and let `server start` reuse the existing running server (if any).
+
    ```bash
    gemdesign server start
    ```
