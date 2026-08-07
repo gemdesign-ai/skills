@@ -1,7 +1,7 @@
 ---
 name: gemdesign-skill
 description: Generate, save, and modify GemDesign prototype pages via CLI. Invoke when user wants to create UI prototypes, design pages, or batch-generate pages from requirements.
-version: 0.1.1
+version: 0.1.2
 license: MIT
 compatibility: [claude, codex, cursor, trae, hermes, openclaw, qoder, opencode , workbuddy, qclaw]
 ---
@@ -19,7 +19,9 @@ Use the `gemdesign` CLI to create, save, and modify high-fidelity prototype page
 
 ## Prerequisites
 
-> **CRITICAL: The following steps MUST be executed strictly in order. Each step MUST fully complete before proceeding to the next. Do NOT skip, parallelize, or advance until the current step is confirmed successful.**
+> **CRITICAL: Step 1, Step 2, and Step 2.5 MUST be executed strictly in order BEFORE starting any Workflow. Each step MUST fully complete before proceeding to the next. Do NOT skip, parallelize, or advance until the current step is confirmed successful.**
+>
+> **IMPORTANT — Step 3 timing**: Step 3 (Start the Local Server) is NOT executed immediately after login. It MUST be executed INSIDE a Workflow, AFTER the app is created or reused (i.e., after `gemdesign app create` / `gemdesign app use` + `gemdesign app info`), and BEFORE any page generation. Starting the server before the app exists is a violation — the server serves pages from the project subdirectory derived from the app, so the app must exist first.
 
 ### Step 1: Verify & Install GemDesign CLI (MUST complete before Step 2)
 
@@ -49,13 +51,13 @@ Use the `gemdesign` CLI to create, save, and modify high-fidelity prototype page
 
 After this step is confirmed complete, the `gemdesign-ai` command is available globally at the latest version. **Only then** may you advance to Step 2.
 
-### Step 2: Verify Login (MUST complete after Step 1, before Step 3)
+### Step 2: Verify Login (MUST complete after Step 1, before any Workflow)
 
 **ALWAYS verify login status** after Step 1 is complete. Run this command:
 ```bash
 gemdesign auth whoami
 ```
-- If it succeeds (returns user info), the user is logged in — proceed to Step 3.
+- If it succeeds (returns user info), the user is logged in — proceed to a Workflow (A/B/C). Step 3 (local server) will be executed INSIDE the workflow, after the app is created/reused.
 - If it fails (returns an error like "token 无效" or "未提供 token"), the user is NOT authenticated. You MUST:
   1. Tell the user: if they don't have an account or token yet, go to **https://design.gemcoder.com** to register an account and get an API token. The token retrieval path is: log in to the platform -> click **个人中心** (Personal Center) -> get the **MCP 令牌** (MCP token).
   2. Ask the user for their API token (use `AskUserQuestion` tool to prompt the user to input their token).
@@ -65,32 +67,75 @@ gemdesign auth whoami
      ```
   4. Re-verify with `gemdesign auth whoami` to confirm login succeeded.
   5. If login still fails, repeat from step 2 (ask the user to provide their token again).
-  6. Only proceed to Step 3 after login is confirmed.
+  6. Only proceed to a Workflow after login is confirmed.
 
-**HARD GATE**: Until login is confirmed via `gemdesign auth whoami`, you MUST NOT perform ANY page-generation work — this includes CLI commands (`app`, `page`, `style`, `validate`) AND local file operations (writing `.html`, creating `.stream.lock`, streaming write, creating the `./output/` directory). Local HTML generation is NOT a workaround for the login gate; a page can only be saved to the platform by an authenticated user, so generating it before login is wasted work. If login fails, stop and resolve authentication first — do not start writing any HTML.
+**HARD GATE**: Until login is confirmed via `gemdesign auth whoami`, you MUST NOT perform ANY page-generation work — this includes CLI commands (`app`, `page`, `style`, `validate`) AND local file operations (writing `.html`, streaming write, creating the `./output/` directory). Local HTML generation is NOT a workaround for the login gate; a page can only be saved to the platform by an authenticated user, so generating it before login is wasted work. If login fails, stop and resolve authentication first — do not start writing any HTML.
 
-### Step 3: Start the Local Server (MUST complete after Step 2, before any page generation)
+### Step 2.5: Configure htmlWorkdir and Clean Up (MUST complete after Step 2, before any Workflow)
+
+After login is confirmed, configure the HTML working directory (`htmlWorkdir`) and then clean up stale empty project directories left over from previous interrupted sessions. Both operations MUST complete before starting any Workflow (in particular, before `app create`), because `cleanup` needs `htmlWorkdir` to be configured first in order to scan it.
+
+1. **Configure htmlWorkdir** (run once, persists across sessions):
+   > **CRITICAL - `app create` sync-creates the local project folder under `htmlWorkdir`, and `server start` validates `htmlWorkdir` before launching.** If `htmlWorkdir` is not configured, `app create` skips local folder creation (returns a `warning`), and `server start` returns `{"success":false,"error":"未配置 htmlWorkdir，请先执行 gemdesign server workdir --path <path> 设置 HTML 工作目录"}` and refuses to start. This prevents the background process's cwd from mismatching the actual HTML generation directory, which would cause fileWatcher to miss `.html` changes and the canvas to stay blank ("page generated but canvas not showing").
+
+   ```bash
+   gemdesign server workdir --path ./output
+   ```
+   - Relative paths are resolved against the current working directory to an absolute path.
+   - Verify with `gemdesign server workdir` (no flags) - returns `{"success":true,"htmlWorkdir":"<absolute path>"}`.
+   - If htmlWorkdir is already configured (returns a non-empty `htmlWorkdir`), skip this step.
+
+2. **Clean up empty project directories** (MUST run AFTER step 1, because `cleanup` scans `htmlWorkdir` which must be configured first):
+   ```bash
+   gemdesign server cleanup
+   ```
+   - The command scans the configured `htmlWorkdir` (the `./output` directory) for project subdirectories (named `{projectName}__{appuuid}`).
+   - It deletes:
+     - **Empty project directories**: project subdirectories that contain zero `.html` files (created by `app create` but never had a page saved — e.g., the session was interrupted).
+     - **Orphaned streaming files**: files left over from streaming write that was started but never completed.
+   - Returns JSON: `{"success":true,"message":"清理完成：删除 N 个空项目目录，清理 M 个遗留文件","removedDirs":[...],"removedLocks":[...]}`
+   - **This step is non-blocking**: cleanup failures do not prevent proceeding to a Workflow. The command always returns `success: true` unless an unexpected error occurs.
+
+### Step 3: Start the Local Server (MUST complete after app is created/reused, before any page generation)
 
 > **CRITICAL - HARD GATE: You MUST open the browser in this step.** This is NON-NEGOTIABLE and MUST NOT be skipped, deferred, or treated as optional. Generating any page before the browser is open is a SERIOUS VIOLATION - the user needs the real-time preview surface to see pages as they are generated. You MUST actively open the browser yourself using your platform's built-in browser/preview tool (see step 3 below for the fallback strategy). Do NOT just output a URL in chat text and wait for the user to click it — you MUST programmatically open the browser.
 
-After Step 1 (CLI installed) and Step 2 (Login verified) are both confirmed complete, start the local server for real-time streaming preview.
+> **TIMING — Execute INSIDE a Workflow, NOT immediately after login.** Step 3 is invoked from within Workflow A/B/C (see each workflow's "Start the local server" step), AFTER the app has been created or reused via `gemdesign app create` / `gemdesign app use` and confirmed via `gemdesign app info`. Do NOT start the server right after Step 2 (login) — the server serves pages from the project subdirectory derived from the app (`<projectDir> = {projectName}__{appuuid}`), so the app must exist first. Starting the server before the app exists is a violation.
+
+After Step 1 (CLI installed), Step 2 (Login verified), AND the app is created/reused (inside a Workflow) are all confirmed complete, start the local server for real-time streaming preview.
 
 The local server provides real-time streaming preview of HTML pages as they are being generated. The server is built into the CLI and managed via the `gemdesign server` commands. The server runs on port `4056` by default; if that port is occupied it auto-retries the next available port (up to `4066`).
 
-1. **Start the local server** using the CLI command:
+0. **Ensure htmlWorkdir is configured** (MUST complete before `app create` in a Workflow, and before `server start`):
+   > htmlWorkdir is configured in Step 2.5 (persists across sessions). `app create` sync-creates the local project folder under `htmlWorkdir`, and `server start` validates `htmlWorkdir` before launching — if it is not configured, `app create` skips local folder creation (returns a `warning`) and `server start` refuses to start, causing fileWatcher to miss `.html` changes and the canvas to stay blank ("page generated but canvas not showing").
+   >
+   > If Step 2.5 was skipped (e.g. resuming a session), verify now: `gemdesign server workdir` (no flags) returns `{"success":true,"htmlWorkdir":"<absolute path>"}`. If it returns an empty `htmlWorkdir`, run `gemdesign server workdir --path ./output` before proceeding.
 
-   > **CRITICAL — If Step 1 updated the CLI, stop the old server first.** If you ran `npm update -g @gemdesign-ai/cli` in Step 1, any previously running server is still using the OLD CLI code. You MUST stop it before starting a new one, otherwise the new server code will not be loaded:
+1. **Stop any previously running server** (MANDATORY before every `server start`, CANNOT be skipped):
+   > **CRITICAL — 执行 `server start` 之前必须先执行 `server stop` 终止之前启动的服务**，无论应用是新建还是复用都不可跳过。这确保 fileWatcher 绑定到正确的项目目录，避免残留进程干扰新会话。
+   >
+   > **HARD GATE - 严禁跳过此步**：无论你认为当前是否已有服务在运行，都必须执行 `gemdesign server stop` 命令。禁止以"服务器未运行"、"上一次会话已启动"、"浏览器预览已打开"、"为了节省时间"等任何理由跳过 stop。必须以 `gemdesign server stop` 的实际返回结果作为唯一判定依据。
+   >
    > ```bash
    > gemdesign server stop
    > ```
-   > - If it returns `{"success":true,"message":"本地服务已停止"}`, the old server has been stopped — continue to start a fresh server below.
-   > - If it returns an error like `{"success":false,"error":"未发现运行中的本地服务"}`, no server was running — ignore this error and continue.
-   > - **If Step 1 did NOT update the CLI** (CLI was already up-to-date), skip the stop command and let `server start` reuse the existing running server (if any).
+   - 返回 `{"success":true,"message":"本地服务已停止"}` 表示已停止，继续下一步。
+   - 返回 `{"success":false,"error":"未发现运行中的本地服务"}` 表示无运行中的服务，忽略此错误继续下一步。
+   - **必须等待上述命令返回结果后才能进入第 2 步**。在 stop 命令未返回前，不得执行任何 `server start` 操作。
 
+2. **Start the local server** using the CLI command:
    ```bash
    gemdesign server start
    ```
-   - If a server is already running, the command will detect it and return the existing port — no duplicate server will be started.
+   > **必须在执行此命令前先完成上一步的 `gemdesign server stop`**，不得在未停止旧服务的情况下直接 start。
+   >
+   > **HARD GATE - 顺序约束**：`server start` 必须在 `server stop` 命令返回结果（成功或"未发现运行中的本地服务"错误）之后才能执行。严禁以下行为：
+   > - 将 `server stop` 与 `server start` 并行执行（例如在同一个并行工具调用批次中）；
+   > - 在 `server stop` 命令尚未返回结果时就发起 `server start`；
+   > - 先执行 `server start` 再执行 `server stop`；
+   > - 因为"觉得没必要 stop"而跳过 stop 直接 start。
+   >
+   > 正确顺序：执行 `gemdesign server stop` -> 等待命令返回结果 -> 执行 `gemdesign server start`。这是不可逆的串行依赖关系。
    - If the server starts successfully, the command returns JSON: `{"success":true,"port":<port>,"url":"http://localhost:<port>"}`
    - If the server fails to start, the command returns JSON with an error: `{"success":false,"error":"<error message>"}`
    - **On error**: Read the error message carefully. Common errors:
@@ -98,13 +143,13 @@ The local server provides real-time streaming preview of HTML pages as they are 
      - `"服务启动失败，进程已退出"`: Possible port conflict or config file error — check `~/.gemdesign/config.json`.
    - Record the `<port>` from the success response for subsequent steps.
 
-2. **Check server status** (optional, for debugging):
+3. **Check server status** (optional, for debugging):
    ```bash
    gemdesign server status
    ```
    Returns: `{"success":true,"status":"running","port":<port>,"url":"http://localhost:<port>"}` or `{"success":true,"status":"stopped"}`
 
-3. **Open the preview (MANDATORY — HARD GATE, DO NOT SKIP)**: After the server is confirmed running (the `server start` command returned success), you MUST open the browser and navigate to the service page named **GemDesign设计器** (URL: `http://localhost:<port>` - use the port from the `server start` response).
+4. **Open the preview (MANDATORY — HARD GATE, DO NOT SKIP)**: After the server is confirmed running (the `server start` command returned success), you MUST open the browser and navigate to the service page named **GemDesign设计器** (URL: `http://localhost:<port>` - use the port from the `server start` response).
 
    > **This step is NON-NEGOTIABLE.** Do NOT proceed to any page generation workflow (Workflow A/B/C) until the browser is open at `http://localhost:<port>`. The server being up is NOT the same as the preview being open - the user must SEE the preview surface in the browser.
    >
@@ -140,9 +185,14 @@ The local server provides real-time streaming preview of HTML pages as they are 
 gemdesign server start [--port <port>]   # 启动本地设计器服务（默认端口 4056）
 gemdesign server stop                    # 停止本地设计器服务
 gemdesign server status                  # 查看服务运行状态
+gemdesign server workdir --path <path>   # 保存 HTML 工作目录（htmlWorkdir，相对路径基于当前目录解析为绝对路径）
+gemdesign server workdir                 # 查看当前 htmlWorkdir
+gemdesign server workdir --clear         # 清除 htmlWorkdir 配置
+gemdesign server cleanup                 # 清理空项目目录和遗留的流式文件
 ```
-> **server start** starts the local server as a background process. If a server is already running, it returns the existing port. On success, returns JSON with `port` and `url`. On failure, returns JSON with `error` message — read it carefully to diagnose and fix the issue before retrying.
-> **server stop** stops the running server. On Windows, uses `taskkill` to terminate the process tree. Returns error if no server is running or if the process cannot be terminated.
+> **server workdir** 保存 HTML 工作目录到 `~/.gemdesign/config.json` 的 `htmlWorkdir` 字段。本地服务启动后通过 fileWatcher 监听此目录下的 `.html` 文件变更，并经 SSE 推送到浏览器画布。**`app create` 会在此目录下同步创建项目子目录 `{projectName}__{appuuid}`**，**`server start` 也会在启动前校验 htmlWorkdir 是否已配置**--未配置时 `app create` 跳过本地目录创建（返回 `warning`），`server start` 拒绝启动并返回错误提示，避免后台进程 cwd 与实际 HTML 生成目录不一致导致"页面生成但画布不显示"。建议在登录后、**`app create` 之前**执行一次 `gemdesign server workdir --path ./output`（路径通常是 `./output`，即页面 HTML 的根目录）。配置一次后持久化，后续无需重复设置。
+> **server start** 以后台进程方式启动本地服务。**执行 `server start` 之前必须先执行 `server stop` 终止之前的服务**，不得在未停止旧服务的情况下直接 start。**`server stop` 严禁跳过**（即使你认为没有运行中的服务也必须执行该命令），且 **`server start` 必须等 `server stop` 命令返回结果后才能执行**——禁止将两者并行执行、或在 stop 未返回时就发起 start。启动成功返回含 `port` 和 `url` 的 JSON；失败返回含 `error` 的 JSON，需仔细阅读错误信息诊断并修复后再重试（重试前同样要先 stop）。
+> **server stop** stops the running server. On Windows, uses `taskkill` to terminate the process tree. Returns error if no server is running or if the process cannot be terminated — 此时该错误可忽略（表示本就无运行中的服务），但仍视为 stop 步骤已执行完成，可继续 start。
 > **server status** returns the current status (`running` or `stopped`), port, and URL if running.
 
 ### Authentication
@@ -153,15 +203,18 @@ gemdesign auth whoami                  # Verify identity
 
 ### App Management
 ```bash
-gemdesign app create --name "MyApp" [--type web|app]    # Create new app, --type defaults to web
+gemdesign app create --name "MyApp" [--type web|app] [--width <px>] [--height <px>] [--workdir <path>]    # Create new app (sync-creates local project folder under htmlWorkdir), --type defaults to web
 gemdesign app list                     # List all apps
 gemdesign app info [--appuuid <id>]    # App details
 gemdesign app use --appuuid <id>       # Switch current default app
 ```
+> **app create 画布尺寸**: `--width`/`--height` 用于指定画布像素尺寸。不传时按 `--type` 取默认值：`web` -> 1920×1080，`app` -> 440×956。传入的尺寸会随应用信息同步到本地设计器画布（覆盖默认值）。示例：`gemdesign app create --name "PadApp" --type app --width 768 --height 1024`。
+> **CRITICAL - `server workdir` MUST run BEFORE `app create`**: `app create` 成功后会在 `htmlWorkdir` 下**同步创建本地项目子目录** `{projectName}__{appuuid}`（与 `page` 命令的命名规范一致），后续页面 HTML 直接写入该目录，local-server 也据此扫描项目。因此 **`gemdesign server workdir --path <path>` 必须在 `app create` 之前执行**（或通过 `--workdir <path>` 在创建应用时一并指定，效果等同于先 `server workdir` 再 `app create`）。若未配置 `htmlWorkdir`，应用仍会在服务端创建成功，但本地目录创建会被跳过，并在返回结果中以 `warning` 提示。
 > **appuuid priority**: `--appuuid` flag > `defaultAppUuid` (set by `app create`/`app use`) > `GEMDESIGN_APPUUID` env
 > Once you run `app create` or `app use`, subsequent `page` commands don't need `--appuuid`.
 > **IMPORTANT**: Always check `gemdesign app list` BEFORE creating a new app. Reuse existing apps to keep all pages in the same project folder. Only create a new app when the user explicitly asks for one.
 > **CRITICAL - Never create duplicate apps**: Never call `gemdesign app create` more than once in a single session/task. If you have already run `app create` in this session, you MUST NOT run it again — even if a later workflow step or retry seems to require app setup. Instead, reuse the existing app by running `gemdesign app list` to find it, then `gemdesign app use --appuuid <id>`. Creating a second app leaves the first one empty and orphaned on the platform.
+> **CRITICAL - Restart the server around every `app create` or `app use`**: 正确顺序为：`gemdesign server stop` -> (等待 stop 命令返回结果) -> (确保 `htmlWorkdir` 已配置) -> `gemdesign app create` / `gemdesign app use` -> `gemdesign server start`。该顺序由 workflow 步骤强制执行，不要作为独立序列重复执行。**执行 `server start` 之前必须先执行 `server stop` 终止之前的服务**，无论应用是新建还是复用，否则旧服务的 fileWatcher 仍绑定在前一个 app 的 `<projectDir>`，新页面不会推送到画布。**`server stop` 这一步严禁跳过**（即使你认为没有运行中的服务也必须执行），且 **`server start` 必须等 `server stop` 命令返回结果后才能执行**，禁止并行执行或先 start 后 stop。
 > **IMPORTANT - Output app info to user**: After selecting/switching/creating an app (i.e., after any `app create`, `app use`, or `app info` call that establishes the working app), you MUST clearly tell the user in your text response which app is now the active target for page generation. At minimum, output the **app name** and **appuuid** (and ideally the computed `<projectDir>`). This ensures the user always knows which app pages will be generated/modified in, and can interrupt if the wrong app was picked. See the "Output current app info to user" step in each workflow for the exact format.
 > **CRITICAL - App type determines page type**: Apps have a type - `web` (桌面端) or `app` (移动端) - returned by `app info` as the `pageScene` field. **When generating new pages, the page type MUST match the app type**: a `web` app can only contain `web` pages (desktop layout, wide screen), and an `app` app can only contain `app` pages (mobile layout, narrow screen). Before generating any HTML, check the app's `pageScene` from `app info` and design the page accordingly. Do NOT generate a desktop-width page for an `app` type app, or a mobile-width page for a `web` type app.
 
@@ -179,13 +232,19 @@ gemdesign page get --pageuuid <id> --file ./output/<projectDir>/<id>.html  # Get
 gemdesign page doc get --pageuuid <id> --file ./output/<projectDir>/<id>.md  # Get requirement doc
 ```
 
+### Page - Create (streaming mode)
+```bash
+gemdesign page create --pageuuid <readable-id> --name "<pageName>"   # Create page + enter streaming mode
+```
+> `page create` signals the local server to start streaming mode for this page, enabling real-time HTML preview as you write to the `.html` file. This command should be called BEFORE writing the HTML file, and the streaming mode is automatically ended when `page save` completes.
+
 ### Page - Save (with validation)
 ```bash
 gemdesign page save --pageuuid <id> --file ./output/<projectDir>/<id>.html                                         # Update existing
 gemdesign page save --new --pageuuid <readable-id> --name "Login" --file ./output/<projectDir>/<readable-id>.html  # Create new
 gemdesign page doc save --pageuuid <id> --file ./doc.md                                                           # Save requirement doc
 ```
-> `page save` automatically validates the HTML against the GemDesign Page Spec before uploading.
+> `page save` automatically validates the HTML against the GemDesign Page Spec before uploading. After a successful save, it automatically ends streaming mode, triggering the browser to fetch the final render.
 > `page doc save` saves an agent-generated requirement document to the platform.
 > **`--pageuuid` for `--new`**: Use a human-readable id (e.g. filename without `.html`). Ensure uniqueness within the app. This id is used directly as `data-uuid` in navigation elements - no need to change them after saving.
 > **Project subdirectory**: Always use `./output/<projectDir>/` in paths. The CLI is idempotent - if the path already contains `<projectDir>`, it won't duplicate it. See "Local File Management" for details.
@@ -207,6 +266,7 @@ For every page, save HTML files locally under `./output/`, organized by project 
 > - `projectName` comes from `app info` (illegal filesystem chars `\/:*?"<>|` removed, whitespace collapsed to `_`)
 > - Empty `projectName` falls back to `默认项目`; empty `appuuid` falls back to `local`
 > - Examples: `CRM系统__abc-123`, `电商App__9f3e`, `默认项目__local`
+> - **Directory creation**: This subdirectory is sync-created by `app create` under `htmlWorkdir` (requires `htmlWorkdir` configured first via `server workdir`); `page get`/`page save` also create it idempotently when writing files.
 >
 > **How to write files**:
 > - **Always use `./output/<projectDir>/<pageuuid>.html`** in all file paths, whether writing files directly or passing to CLI commands.
@@ -220,36 +280,31 @@ For every page, save HTML files locally under `./output/`, organized by project 
 
 When generating HTML pages, use the **streaming write workflow** to enable real-time display in the browser. The GemDesign local server watches for file changes and pushes incremental content to the browser via Server-Sent Events (SSE).
 
-> **CRITICAL — Do NOT open the browser again during streaming write (or at any point after Step 3).** The designer SPA (already open in the browser from Step 3) watches for `.stream.lock` and `.html` file changes and auto-loads the generated HTML into its inner iframe via SSE. You do NOT need to "open" or "refresh" anything — just write the files and the designer updates itself in real time. Navigating the browser to the generated `.html` URL (e.g. via a preview tool or OS browser command with a page-specific URL) will OVERWRITE the designer with the generated HTML and break the preview surface. The only valid URL for opening the browser is the designer root `http://localhost:<port>/`, and even that should NOT be re-used after Step 3.
+> **CRITICAL — Do NOT open the browser again during streaming write (or at any point after Step 3).** The designer SPA (already open in the browser from Step 3) watches for `.html` file changes and auto-loads the generated HTML into its inner iframe via SSE. You do NOT need to "open" or "refresh" anything — just write the files and the designer updates itself in real time. Navigating the browser to the generated `.html` URL (e.g. via a preview tool or OS browser command with a page-specific URL) will OVERWRITE the designer with the generated HTML and break the preview surface. The only valid URL for opening the browser is the designer root `http://localhost:<port>/`, and even that should NOT be re-used after Step 3.
 
 ### How It Works
 
-The local server watches `.stream.lock` files and `.html` files:
-1. **Create `.stream.lock`** → browser enters streaming mode for that page
-2. **Append to `.html`** → browser receives incremental HTML and re-renders
-3. **Delete `.stream.lock`** → browser fetches the complete HTML and switches to final render
+The CLI automatically manages the streaming lifecycle for you. The `gemdesign page create` command starts streaming mode, and `gemdesign page save` automatically ends it. The browser receives incremental HTML as you append to the `.html` file:
+
+1. **`gemdesign page create`** → browser enters streaming mode for that page
+2. **Append to `.html`** → browser receives incremental HTML and re-renders in real-time
+3. **`gemdesign page save`** → browser fetches the complete HTML and switches to final render
 
 ### Steps
 
 For each page you generate, follow this workflow instead of writing the complete HTML in one shot:
 
-1. **Compute paths**:
+1. **Compute path**:
    - `htmlPath = ./output/<projectDir>/<pageuuid>.html`
-   - `lockPath = ./output/<projectDir>/<pageuuid>.stream.lock`
 
-2. **Create the stream lock file** (signals browser to enter streaming mode AND triggers designer to switch to this project):
+2. **Create the page (enter streaming mode)**:
    ```bash
-   # Windows PowerShell:
-   Set-Content -Path "./output/<projectDir>/<pageuuid>.stream.lock" -Value '{"pageUuid":"<pageuuid>","startTime":"<iso-timestamp>"}'
-   # macOS/Linux:
-   echo '{"pageUuid":"<pageuuid>","startTime":"<iso-timestamp>"}' > ./output/<projectDir>/<pageuuid>.stream.lock
+   gemdesign page create --pageuuid <pageuuid> --name "<pageName>"
    ```
-   Wait ~300ms for the browser to subscribe to the SSE channel.
-   
-   > **CRITICAL - Designer auto-switches project**: When the `.stream.lock` file is created, the local server pushes a `switch` event via the `project:list` SSE channel. The designer SPA (already open in the browser) receives this event and automatically switches to the project being generated (matching by `appuuid` extracted from the `<projectDir>` path). This ensures the designer's SSE subscriptions (`page:list:<appuuid>` and `page:stream:<pageUuid>`) are aligned with the project whose page is being generated. **No manual action is needed** - the switch happens automatically as part of creating the stream lock. If this is the first page being generated for a different project than what the designer currently shows, allow ~1-2 seconds for the designer to complete the project switch (destroy old canvas, reinitialize, re-subscribe SSE) before writing HTML content.
+   This signals the local server to start streaming mode for this page. The browser will enter streaming mode and prepare to receive incremental HTML.
 
 3. **Write the HTML file** (append-only after the first write, NEVER overwrite with shorter content):
-   - You may write the HTML in one shot or in multiple appends — the stream poller detects file changes every 10ms and pushes each append to the browser in real-time.
+   - You may write the HTML in one shot or in multiple appends — the local server detects file changes and pushes each append to the browser in real-time.
    - The HTML must be a complete document: `<!DOCTYPE html>` + `<head>` (with all dependencies and styles) + `<body>...</body>` + `</html>`.
    - If writing in multiple appends, ensure the first write includes the `<body>` tag so the browser can start rendering immediately (the browser only renders after `<body>` appears).
 
@@ -257,66 +312,55 @@ For each page you generate, follow this workflow instead of writing the complete
    > - Always **append** to the file after the first write. Never overwrite with shorter content during streaming — this triggers a `pageReset` event and forces the browser to re-render from scratch.
    > - If you must rewrite from scratch, delete the `.html` file first, then start over.
    > - The first write creates the file (length goes from 0 to N), subsequent writes append (length goes from N to N+M).
-   > - **No delays or chunk-size limits**: Write as fast as you like, in any size. The stream poller pushes every file change to the browser within ~10ms.
-   > - **Clean up on failure**: If streaming write fails or is interrupted, delete the `.stream.lock` file and any partial `.html` file for that page. Never leave orphaned lock files - they keep the browser in streaming mode indefinitely. The local server also cleans up orphaned lock files and empty project directories on startup.
+   > - **No delays or chunk-size limits**: Write as fast as you like, in any size. The local server pushes every file change to the browser within ~10ms.
+   > - **Clean up on failure**: If streaming write fails or is interrupted, delete any partial `.html` file for that page. You can also run `gemdesign server cleanup` to clean up orphaned files and empty project directories.
 
-4. **Validate the HTML** (while streaming is still active — this ensures the browser stays in streaming mode until validation passes):
+4. **Validate the HTML**:
    ```bash
    gemdesign validate --file ./output/<projectDir>/<pageuuid>.html
    ```
-   If validation fails, fix the HTML and re-validate. The browser continues to show the streaming state, giving immediate feedback on fixes. **Do NOT delete the `.stream.lock` file until validation passes.**
+   If validation fails, fix the HTML and re-validate. The browser continues to show the streaming state, giving immediate feedback on fixes.
 
-5. **Delete the stream lock file** (only after validation passes — signals browser that streaming is complete):
-   ```bash
-   # Windows PowerShell:
-   Remove-Item "./output/<projectDir>/<pageuuid>.stream.lock"
-   # macOS/Linux:
-   rm ./output/<projectDir>/<pageuuid>.stream.lock
-   ```
-   The browser will automatically fetch the complete HTML and switch to the final rendered version.
-
-6. **Save to platform**:
+5. **Save to platform**:
    ```bash
    gemdesign page save --new --pageuuid <pageuuid> --name "<pageName>" --file ./output/<projectDir>/<pageuuid>.html
    ```
+   When the save completes, the CLI automatically ends streaming mode. The browser fetches the complete HTML and switches to the final render.
 
 ### Example (Streaming Write for a "home" page)
 
 ```bash
-# 1. Create stream lock
-Set-Content -Path "./output/MyApp__abc-123/home.stream.lock" -Value '{"pageUuid":"home","startTime":"2026-07-22T10:00:00Z"}'
-# Wait ~300ms
+# 1. Create the page (enter streaming mode)
+gemdesign page create --pageuuid home --name "首页"
 
 # 2. Write the HTML file (one shot or multiple appends — your choice)
 #    Use Write tool to create ./output/MyApp__abc-123/home.html with the complete HTML:
 #    <!DOCTYPE html><html><head>...<script src="tailwind"></script>...</head><body>...content...</body></html>
 #    Or write in multiple appends (ensure first write includes <body> tag).
 
-# 3. Validate (while streaming is still active)
+# 3. Validate
 gemdesign validate --file ./output/MyApp__abc-123/home.html
 # Fix any validation errors and re-validate before proceeding
 
-# 4. Delete stream lock (only after validation passes)
-Remove-Item "./output/MyApp__abc-123/home.stream.lock"
-
-# 5. Save to platform
+# 4. Save to platform (automatically ends streaming mode)
 gemdesign page save --new --pageuuid home --name "首页" --file ./output/MyApp__abc-123/home.html
 ```
 
 ## Workflows
 
-> **PRECONDITION FOR ALL WORKFLOWS**: Step 1 (CLI installed & up-to-date), Step 2 (Login verified via `gemdesign auth whoami`), AND Step 3 (local server running AND browser preview opened) MUST ALL be confirmed complete BEFORE starting any workflow. If login is not confirmed, do NOT generate HTML, do NOT create `./output/` files, do NOT start streaming write - stop and resolve authentication first. If the browser preview is NOT open yet, do NOT start generating any page — go back and complete Step 3 (open the browser) first. This applies to Workflow A, B, and C alike.
+> **PRECONDITION FOR ALL WORKFLOWS**: Step 1 (CLI installed & up-to-date), Step 2 (Login verified via `gemdesign auth whoami`), AND Step 2.5 (htmlWorkdir configured + cleanup) MUST be confirmed complete BEFORE starting any workflow. If login is not confirmed, do NOT generate HTML, do NOT create `./output/` files, do NOT start streaming write - stop and resolve authentication first. Step 3 (local server running AND browser preview opened) is NOT executed before starting a workflow — it is executed INSIDE each workflow, AFTER the app is created/reused (and `app info` confirms `<projectDir>`), and BEFORE any page generation. This applies to Workflow A, B, and C alike.
 
 ### Workflow A: Batch Generation from Requirements
 
-1. **Complete Prerequisites**: Ensure Step 1 (CLI install/update), Step 2 (Login), AND Step 3 (local server running + browser preview opened) are ALL confirmed complete before proceeding. If the browser preview is not open yet, go back to Step 3 and open the browser ONCE to the designer at `http://localhost:<port>`. If the preview is ALREADY open, do NOT open the browser again - the designer stays open and auto-loads generated pages via SSE for the entire session. Never open the browser with a generated-page URL (e.g. `http://localhost:<port>/output/<projectDir>/<pageuuid>.html`) - that overwrites the designer with the generated HTML and destroys the preview surface.
+1. **Complete Prerequisites**: Ensure Step 1 (CLI install/update), Step 2 (Login), AND Step 2.5 (htmlWorkdir configured + cleanup) are confirmed complete before proceeding. Step 3 (local server + browser preview) is NOT done here — it is executed in step 5 below, AFTER the app is created/reused.
 2. **Ensure app exists (reuse first!)**:
+   - **Ensure htmlWorkdir is configured (MUST complete before `app create`)**: htmlWorkdir was configured in Step 2.5 (persists across sessions). Verify with `gemdesign server workdir` (no flags); if it returns an empty `htmlWorkdir`, run `gemdesign server workdir --path ./output` first. This MUST be done before `app create` so that `app create` synchronously creates the local project folder `{projectName}__{appuuid}` under `htmlWorkdir`.
    - Run `gemdesign app list` to check existing apps
    - **If apps already exist**: Run `gemdesign app use --appuuid <id>` to set the target app as default. Do NOT create a new app unless the user explicitly asks for a new one.
-   - **If no apps exist**: Run `gemdesign app create --name "<AppName>" [--type web|app]` to create one (default type is `web`). **After creating, immediately run `gemdesign app info` to confirm the app exists and record its appuuid. Do NOT run `app create` again for any reason in this session.**
+   - **If no apps exist**: Run `gemdesign app create --name "<AppName>" [--type web|app] [--width <px>] [--height <px>] [--workdir <path>]` to create one (default type is `web`; default canvas size: `web` -> 1920×1080, `app` -> 440×956). `app create` sync-creates the local project folder under `htmlWorkdir` (pass `--workdir` to set it in one step). **After creating, immediately run `gemdesign app info` to confirm the app exists and record its appuuid. Do NOT run `app create` again for any reason in this session.** 之前运行中的服务会在步骤 5 的 `server stop` 中统一终止。
    - **CRITICAL - No duplicate apps**: If you already ran `app create` earlier in this session (even in a previous workflow attempt), do NOT run it again. Reuse the existing app via `app list` + `app use`. Creating a second app leaves the first one empty and orphaned.
    - **CRITICAL**: All pages in the same batch MUST go into the same app. Reusing an existing app prevents pages from being scattered across different project folders.
-3. **Get project directory name**: 
+3. **Get project directory name**:
    - Run `gemdesign app info` to get `{appuuid}` and `{projectName}`
    - Compute `<projectDir> = {projectName}__{appuuid}` (remove illegal chars `\/:*?"<>|` from projectName, collapse whitespace to `_`)
    - Example: project name "电商 App" with appuuid "abc-123" → `<projectDir> = "电商_App__abc-123"`
@@ -326,7 +370,7 @@ gemdesign page save --new --pageuuid home --name "首页" --file ./output/MyApp_
      - **App UUID** (`appuuid` from `app info`)
      - **App type** (`pageScene` from `app info` - `web` for 桌面端, `app` for 移动端)
      - **Project directory** (`<projectDir>` computed in step 3)
-     - **Page count** to be generated in this batch (from step 5 analysis)
+     - **Page count** to be generated in this batch (from step 7 analysis)
    - Example output format:
      ```
      📦 当前应用信息
@@ -339,35 +383,47 @@ gemdesign page save --new --pageuuid home --name "首页" --file ./output/MyApp_
    - **Type matching**: The `pageScene` value determines the page layout you MUST follow. Generate `web` (desktop, wide-screen) pages for `web` apps, `app` (mobile, narrow-screen) pages for `app` apps. Do NOT mix types - a web app cannot contain app pages, and vice versa.
    - If the user did not explicitly specify an app and you reused an existing app, also tell the user which app was selected (e.g. "已复用现有应用：电商 App") so they can interrupt if it's the wrong one.
    - **Pause-friendly**: This is informational only - no user reply is required unless the user wants to switch apps. Continue to the next step immediately after outputting.
-5. **Search style** (optional): `gemdesign style search --keywords "电商,现代,简洁"` → select one → `gemdesign style get --id <id>`
-6. **Analyze requirements**: Read the requirements doc, break down into individual pages. Assign each page a readable `pageuuid` (e.g. `home`, `product-list`, `cart`).
-7. **Generate design system page (only for newly created apps)**: If a new app was created in step 2 (not reused), generate a design system page as the visual style baseline before generating business pages. All subsequent business pages should follow this style. Determine the design system type based on `pageScene` from `app info`, and generate the page following the type table and page structure in the dedicated **"Design System Page Spec"** section below. The pageuuid is fixed as `design-system` and is NOT counted as a business page. **You MUST save the design system page to the platform (not just write it locally) - otherwise it will not appear in the app and cannot serve as the style baseline.** Use the **Streaming Write Workflow** with these explicit steps (same create-validate-save process as business pages):
-   - Create `./output/<projectDir>/design-system.stream.lock` (wait ~300ms for the browser to subscribe to SSE)
+5. **Start the local server (Step 3)**: Now that the app exists and `<projectDir>` is computed, execute Step 3 (see the "Step 3: Start the Local Server" section above) — **必须先执行 `gemdesign server stop` 终止之前的服务**（无论应用是新建还是复用，也无论之前是否已运行服务，均不可跳过此步），**必须等 `server stop` 命令返回结果（确认已停止或无运行中的服务）之后**，才能执行 `gemdesign server start` 启动本地服务，并仅打开一次浏览器到设计器 `http://localhost:<port>/`。记录 `server start` 返回的 `<port>` 供后续步骤使用。这是 HARD GATE：服务未运行或浏览器预览未打开前，不得进入任何页面生成。
+   - **CRITICAL - 严禁跳过 `server stop` 这一步**：即使你认为当前会话中没有运行中的服务，也必须执行 `gemdesign server stop` 命令并以命令返回结果为准。禁止以"服务器已在运行"、"上一次 workflow 已启动"、"浏览器预览已打开"等理由跳过 stop。stop 返回 `{"success":false,"error":"未发现运行中的本地服务"}` 时表示无服务可停，此时可继续下一步 start。
+   - **CRITICAL - `server start` 必须等 `server stop` 执行完成后再执行**：禁止将 stop 和 start 并行执行、或先 start 后 stop。`server start` 的前置条件是 `server stop` 已返回结果。
+   - Never open the browser with a generated-page URL (e.g. `http://localhost:<port>/output/<projectDir>/<pageuuid>.html`) - that overwrites the designer with the generated HTML and destroys the preview surface.
+6. **Search style** (optional): `gemdesign style search --keywords "电商,现代,简洁"` → select one → `gemdesign style get --id <id>`
+7. **Analyze requirements**: Read the requirements doc, break down into individual pages. Assign each page a readable `pageuuid` (e.g. `home`, `product-list`, `cart`).
+8. **Generate design system page (only for newly created apps)**: If a new app was created in step 2 (not reused), generate a design system page as the visual style baseline before generating business pages. All subsequent business pages should follow this style. Determine the design system type based on `pageScene` from `app info`, and generate the page following the type table and page structure in the dedicated **"Design System Page Spec"** section below. The pageuuid is fixed as `design-system` and is NOT counted as a business page. **You MUST save the design system page to the platform (not just write it locally) - otherwise it will not appear in the app and cannot serve as the style baseline.** Use the **Streaming Write Workflow** with these explicit steps (same create-validate-save process as business pages):
+   - Create page (enter streaming mode): `gemdesign page create --pageuuid design-system --name "设计系统"`
    - Write the HTML file to `./output/<projectDir>/design-system.html` (follow the Design System Page Spec; pageuuid is `design-system`)
-   - Validate: `gemdesign validate --file ./output/<projectDir>/design-system.html` (fix errors and re-validate; do NOT delete `.stream.lock` until validation passes)
-   - Delete `./output/<projectDir>/design-system.stream.lock` (only after validation passes)
-   - **Save to platform (MANDATORY - do NOT skip)**: `gemdesign page save --new --pageuuid design-system --name "设计系统" --file ./output/<projectDir>/design-system.html` (uploads the design system page into the app so it persists on the platform and shows up in `page list`)
+   - Validate: `gemdesign validate --file ./output/<projectDir>/design-system.html` (fix errors and re-validate)
+   - **Save to platform (MANDATORY - do NOT skip)**: `gemdesign page save --new --pageuuid design-system --name "设计系统" --file ./output/<projectDir>/design-system.html` (uploads the design system page into the app so it persists on the platform and shows up in `page list`; automatically ends streaming mode)
    - Verify it was saved: `gemdesign page list` (confirm `design-system` appears in the list)
-   If the app was reused (switched via `app use` in step 2), skip this step AND skip step 8.
-8. **Design System Review Gate (CRITICAL — only when step 7 generated a design system page)**: Before generating any business page, you MUST apply the **"Design System Review Gate"** rules (see that section below). Evaluate the continue conditions; if none apply, STOP and ask the user for confirmation/feedback on the design system using the format specified in that section. Do not proceed to step 9 until the design system is confirmed by the user or a continue condition is met. If the app was reused (step 7 was skipped), skip this step too.
-9. **For each page** (use **Streaming Write Workflow** above for real-time display):
-   - Generate HTML following the Page Spec below (incorporate style if available). Use the assigned `pageuuid` as `data-uuid` in navigation elements. All business pages MUST follow the style baseline established (and, if applicable, confirmed) in the design system page.
-   - **Use streaming write**: Create `<pageuuid>.stream.lock` → write the HTML file (see "Streaming Write Workflow" section for details). Save HTML locally to: `./output/<projectDir>/<pageuuid>.html` (create the directory if it doesn't exist; use the `<projectDir>` computed in step 3)
-   - Validate: `gemdesign validate --file ./output/<projectDir>/<pageuuid>.html`
-   - Fix any validation errors, re-validate (**do NOT delete `.stream.lock` until validation passes**)
-   - Delete `<pageuuid>.stream.lock` (only after validation passes — signals browser that streaming is complete)
-   - Save to platform: `gemdesign page save --new --pageuuid <pageuuid> --name "页面名" --file ./output/<projectDir>/<pageuuid>.html`
-     (uploads to platform)
-10. **Verify**: `gemdesign page list`
+   If the app was reused (switched via `app use` in step 2), skip this step AND skip step 9.
+9. **Design System Review Gate (CRITICAL — only when step 8 generated a design system page)**: Before generating any business page, you MUST apply the **"Design System Review Gate"** rules (see that section below). Evaluate the continue conditions; if none apply, STOP and ask the user for confirmation/feedback on the design system using the format specified in that section. Do not proceed to step 10 until the design system is confirmed by the user or a continue condition is met. If the app was reused (step 8 was skipped), skip this step too.
+10. **For each page** (use **Streaming Write Workflow** above for real-time display):
+    - Generate HTML following the Page Spec below (incorporate style if available). Use the assigned `pageuuid` as `data-uuid` in navigation elements. All business pages MUST follow the style baseline established (and, if applicable, confirmed) in the design system page.
+    - **Use streaming write** (see "Streaming Write Workflow" section for details):
+      - Create page (enter streaming mode): `gemdesign page create --pageuuid <pageuuid> --name "页面名"`
+      - Write the HTML file to: `./output/<projectDir>/<pageuuid>.html` (create the directory if it doesn't exist; use the `<projectDir>` computed in step 3)
+      - Validate: `gemdesign validate --file ./output/<projectDir>/<pageuuid>.html`
+      - Fix any validation errors, re-validate
+      - Save to platform: `gemdesign page save --new --pageuuid <pageuuid> --name "页面名" --file ./output/<projectDir>/<pageuuid>.html` (uploads to platform, automatically ends streaming mode)
+11. **Verify**: `gemdesign page list`
+12. **Output designer link (MANDATORY - output ONCE, only after ALL pages are generated)**: After ALL pages in the batch are generated, validated, and saved (i.e., after step 10's loop is fully complete and step 11 verification passes), you MUST output a clickable link in your text response so the user can easily open the designer to view the final result. The link MUST be:
+    - **Name**: `gemdesign 设计器` (exact text, do NOT change or translate)
+    - **URL**: `http://localhost:<port>` (use the port recorded from Step 3's `server start` response)
+    - **Format** (markdown link): `[gemdesign 设计器](http://localhost:<port>)`
+    - Example: `[gemdesign 设计器](http://localhost:4056)`
+    > **CRITICAL - Do NOT output this link after each individual page in step 10.** Output it exactly ONCE, at the very end of the entire batch, after every page has been generated and saved. Outputting the link after each page clutters the conversation and violates the "all pages complete" requirement.
+    >
+    > **Note**: This is the ONLY exception to the "do not output URLs in chat text" rule in Step 3. Step 3's rule prohibits outputting a URL *instead of* programmatically opening the browser during setup. This step is different - it runs AFTER all page generation is complete, and outputs a text link for the user to click at their discretion (e.g. if they closed the browser or want to reopen the designer). This is NOT an automatic browser open action - it is a markdown link in your final summary.
 
 ### Workflow B: Conversational Generation
 
 When user asks for a page in conversation:
-1. **Complete Prerequisites**: Ensure Step 1 (CLI install/update), Step 2 (Login), AND Step 3 (local server running + browser preview opened) are ALL confirmed complete before proceeding. If the browser preview is not open yet, go back to Step 3 and open the browser ONCE to the designer at `http://localhost:<port>`. If the preview is ALREADY open, do NOT open the browser again - the designer stays open and auto-loads generated pages via SSE for the entire session. Never open the browser with a generated-page URL (e.g. `http://localhost:<port>/output/<projectDir>/<pageuuid>.html`) - that overwrites the designer with the generated HTML and destroys the preview surface.
+1. **Complete Prerequisites**: Ensure Step 1 (CLI install/update), Step 2 (Login), AND Step 2.5 (htmlWorkdir configured + cleanup) are confirmed complete before proceeding. Step 3 (local server + browser preview) is NOT done here — it is executed in step 5 below, AFTER the app is created/reused.
 2. **Ensure app exists (reuse first!)**:
+   - **Ensure htmlWorkdir is configured (MUST complete before `app create`)**: htmlWorkdir was configured in Step 2.5 (persists across sessions). Verify with `gemdesign server workdir` (no flags); if it returns an empty `htmlWorkdir`, run `gemdesign server workdir --path ./output` first. This MUST be done before `app create` so that `app create` synchronously creates the local project folder `{projectName}__{appuuid}` under `htmlWorkdir`.
    - Run `gemdesign app list` to check existing apps
    - **If apps already exist**: Run `gemdesign app use --appuuid <id>` to set the target app as default. Do NOT create a new app unless the user explicitly asks for a new one.
-   - **If no apps exist**: Run `gemdesign app create --name "<AppName>" [--type web|app]` to create one (default type is `web`). **After creating, immediately run `gemdesign app info` to confirm the app exists and record its appuuid. Do NOT run `app create` again for any reason in this session.**
+   - **If no apps exist**: Run `gemdesign app create --name "<AppName>" [--type web|app] [--width <px>] [--height <px>] [--workdir <path>]` to create one (default type is `web`; default canvas size: `web` -> 1920×1080, `app` -> 440×956). `app create` sync-creates the local project folder under `htmlWorkdir` (pass `--workdir` to set it in one step). **After creating, immediately run `gemdesign app info` to confirm the app exists and record its appuuid. Do NOT run `app create` again for any reason in this session.** 之前运行中的服务会在步骤 5 的 `server stop` 中统一终止。
    - **CRITICAL - No duplicate apps**: If you already ran `app create` earlier in this session (even in a previous workflow attempt), do NOT run it again. Reuse the existing app via `app list` + `app use`. Creating a second app leaves the first one empty and orphaned.
    - **CRITICAL**: All pages MUST go into the same app. Reusing an existing app prevents pages from being scattered across different project folders.
 3. **Get project directory name**: 
@@ -390,38 +446,47 @@ When user asks for a page in conversation:
    - **Type matching**: The `pageScene` value determines the page layout you MUST follow. Generate `web` (desktop, wide-screen) pages for `web` apps, `app` (mobile, narrow-screen) pages for `app` apps. Do NOT mix types - a web app cannot contain app pages, and vice versa.
    - If the user did not explicitly specify an app and you reused an existing app, also tell the user which app was selected (e.g. "已复用现有应用：电商 App") so they can interrupt if it's the wrong one.
    - **Pause-friendly**: This is informational only — no user reply is required unless the user wants to switch apps. Continue to the next step immediately after outputting.
-5. **Generate design system page (only for newly created apps)**: If a new app was created in step 2 (not reused), generate a design system page as the visual style baseline before generating business pages. All subsequent business pages should follow this style. Determine the design system type based on `pageScene` from `app info`, and generate the page following the type table and page structure in the dedicated **"Design System Page Spec"** section below. The pageuuid is fixed as `design-system` and is NOT counted as a business page. **You MUST save the design system page to the platform (not just write it locally) - otherwise it will not appear in the app and cannot serve as the style baseline.** Use the **Streaming Write Workflow** with these explicit steps (same create-validate-save process as business pages):
-   - Create `./output/<projectDir>/design-system.stream.lock` (wait ~300ms for the browser to subscribe to SSE)
+5. **Start the local server (Step 3)**: Now that the app exists and `<projectDir>` is computed, execute Step 3 (see the "Step 3: Start the Local Server" section above) — **必须先执行 `gemdesign server stop` 终止之前的服务**（无论应用是新建还是复用，也无论之前是否已运行服务，均不可跳过此步），**必须等 `server stop` 命令返回结果（确认已停止或无运行中的服务）之后**，才能执行 `gemdesign server start` 启动本地服务，并仅打开一次浏览器到设计器 `http://localhost:<port>/`。记录 `server start` 返回的 `<port>` 供后续步骤使用。这是 HARD GATE：服务未运行或浏览器预览未打开前，不得进入任何页面生成。
+   - **CRITICAL - 严禁跳过 `server stop` 这一步**：即使你认为当前会话中没有运行中的服务，也必须执行 `gemdesign server stop` 命令并以命令返回结果为准。禁止以"服务器已在运行"、"上一次 workflow 已启动"、"浏览器预览已打开"等理由跳过 stop。stop 返回 `{"success":false,"error":"未发现运行中的本地服务"}` 时表示无服务可停，此时可继续下一步 start。
+   - **CRITICAL - `server start` 必须等 `server stop` 执行完成后再执行**：禁止将 stop 和 start 并行执行、或先 start 后 stop。`server start` 的前置条件是 `server stop` 已返回结果。
+   - Never open the browser with a generated-page URL (e.g. `http://localhost:<port>/output/<projectDir>/<pageuuid>.html`) - that overwrites the designer with the generated HTML and destroys the preview surface.
+6. **Generate design system page (only for newly created apps)**: If a new app was created in step 2 (not reused), generate a design system page as the visual style baseline before generating business pages. All subsequent business pages should follow this style. Determine the design system type based on `pageScene` from `app info`, and generate the page following the type table and page structure in the dedicated **"Design System Page Spec"** section below. The pageuuid is fixed as `design-system` and is NOT counted as a business page. **You MUST save the design system page to the platform (not just write it locally) - otherwise it will not appear in the app and cannot serve as the style baseline.** Use the **Streaming Write Workflow** with these explicit steps (same create-validate-save process as business pages):
+   - Create page (enter streaming mode): `gemdesign page create --pageuuid design-system --name "设计系统"`
    - Write the HTML file to `./output/<projectDir>/design-system.html` (follow the Design System Page Spec; pageuuid is `design-system`)
-   - Validate: `gemdesign validate --file ./output/<projectDir>/design-system.html` (fix errors and re-validate; do NOT delete `.stream.lock` until validation passes)
-   - Delete `./output/<projectDir>/design-system.stream.lock` (only after validation passes)
-   - **Save to platform (MANDATORY - do NOT skip)**: `gemdesign page save --new --pageuuid design-system --name "设计系统" --file ./output/<projectDir>/design-system.html` (uploads the design system page into the app so it persists on the platform and shows up in `page list`)
+   - Validate: `gemdesign validate --file ./output/<projectDir>/design-system.html` (fix errors and re-validate)
+   - **Save to platform (MANDATORY - do NOT skip)**: `gemdesign page save --new --pageuuid design-system --name "设计系统" --file ./output/<projectDir>/design-system.html` (uploads the design system page into the app so it persists on the platform and shows up in `page list`; automatically ends streaming mode)
    - Verify it was saved: `gemdesign page list` (confirm `design-system` appears in the list)
-   If the app was reused (switched via `app use` in step 2), skip this step AND skip step 6.
-6. **Design System Review Gate (CRITICAL — only when step 5 generated a design system page)**: Apply the **"Design System Review Gate"** rules (see that section below). If no continue condition applies, STOP and ask the user for confirmation/feedback before proceeding. Do not proceed to step 7 until the design system is confirmed or a continue condition is met. If the app was reused (step 5 was skipped), skip this step too.
-7. Determine a readable `pageuuid` (e.g. filename without `.html`, unique within the app)
-8. Generate HTML following the Page Spec, using `pageuuid` as `data-uuid` in navigation elements. Follow the style baseline established (and, if applicable, confirmed) in the design system page.
-9. **Use streaming write** (see "Streaming Write Workflow" section): Create `<pageuuid>.stream.lock` → write the HTML file to `./output/<projectDir>/<pageuuid>.html` (create the directory if it doesn't exist; use the `<projectDir>` computed in step 3)
-10. `gemdesign validate --file ./output/<projectDir>/<pageuuid>.html`
-11. Fix errors if any, re-validate (**do NOT delete `.stream.lock` until validation passes**)
-12. Delete `<pageuuid>.stream.lock` (only after validation passes — signals browser that streaming is complete)
+   If the app was reused (switched via `app use` in step 2), skip this step AND skip step 7.
+7. **Design System Review Gate (CRITICAL — only when step 6 generated a design system page)**: Apply the **"Design System Review Gate"** rules (see that section below). If no continue condition applies, STOP and ask the user for confirmation/feedback before proceeding. Do not proceed to step 8 until the design system is confirmed or a continue condition is met. If the app was reused (step 6 was skipped), skip this step too.
+8. Determine a readable `pageuuid` (e.g. filename without `.html`, unique within the app)
+9. Generate HTML following the Page Spec, using `pageuuid` as `data-uuid` in navigation elements. Follow the style baseline established (and, if applicable, confirmed) in the design system page.
+10. **Use streaming write** (see "Streaming Write Workflow" section):
+    - Create page (enter streaming mode): `gemdesign page create --pageuuid <pageuuid> --name "<pageName>"`
+    - Write the HTML file to `./output/<projectDir>/<pageuuid>.html` (create the directory if it doesn't exist; use the `<projectDir>` computed in step 3)
+11. `gemdesign validate --file ./output/<projectDir>/<pageuuid>.html`
+12. Fix errors if any, re-validate
 13. `gemdesign page save --new --pageuuid <pageuuid> --name "<pageName>" --file ./output/<projectDir>/<pageuuid>.html`
-   (uploads to platform)
+    (uploads to platform, automatically ends streaming mode)
 14. Describe the result to the user
+15. **Output designer link (MANDATORY - output ONCE, only after ALL page work is complete)**: After the page is generated, validated, and saved, you MUST output a clickable link in your text response so the user can easily open the designer. The link MUST be:
+    - **Name**: `gemdesign 设计器` (exact text, do NOT change or translate)
+    - **URL**: `http://localhost:<port>` (use the port recorded from Step 3's `server start` response)
+    - **Format** (markdown link): `[gemdesign 设计器](http://localhost:<port>)`
+    - Example: `[gemdesign 设计器](http://localhost:4056)`
+    > **CRITICAL - Output this link exactly ONCE, at the very end of the workflow.** Do NOT output it after each intermediate step. This is a text link for the user to click at their discretion, NOT an automatic browser open action. See Workflow A step 12 for the full rationale on why this does not conflict with Step 3's "do not output URLs in chat" rule.
 
 When user requests modifications:
 1. `gemdesign page get --pageuuid <id> --file ./output/<projectDir>/<id>.html` to retrieve HTML+DSL for editing
 2. Modify the HTML (adjust DOM, add/remove interaction DSL, update jsHandle)
-   - For substantial modifications, use the **Streaming Write Workflow**: create `<id>.stream.lock` → rewrite the HTML (delete the old file first if starting fresh, or append if only adding)
+   - For substantial modifications, use the **Streaming Write Workflow**: rewrite the HTML (delete the old file first if starting fresh, or append if only adding)
 3. `gemdesign validate --file ./output/<projectDir>/<id>.html`
-4. Fix errors if any, re-validate (**do NOT delete `.stream.lock` until validation passes**)
-5. Delete `<id>.stream.lock` (only after validation passes — signals browser that streaming is complete)
-6. `gemdesign page save --pageuuid <id> --file ./output/<projectDir>/<id>.html`
-7. If requirement doc needs updating: `gemdesign page doc save --pageuuid <id> --file <updated-doc.md>`
+4. Fix errors if any, re-validate
+5. `gemdesign page save --pageuuid <id> --file ./output/<projectDir>/<id>.html`
+6. If requirement doc needs updating: `gemdesign page doc save --pageuuid <id> --file <updated-doc.md>`
 
 ### Workflow C: Modify Existing Page
 
-1. **Complete Prerequisites**: Ensure Step 1 (CLI install/update), Step 2 (Login), AND Step 3 (local server running + browser preview opened) are ALL confirmed complete before proceeding. If the browser preview is not open yet, go back to Step 3 and open the browser ONCE to the designer at `http://localhost:<port>`. If the preview is ALREADY open, do NOT open the browser again - the designer stays open and auto-loads generated pages via SSE for the entire session. Never open the browser with a generated-page URL (e.g. `http://localhost:<port>/output/<projectDir>/<pageuuid>.html`) - that overwrites the designer with the generated HTML and destroys the preview surface.
+1. **Complete Prerequisites**: Ensure Step 1 (CLI install/update), Step 2 (Login), AND Step 2.5 (htmlWorkdir configured + cleanup) are confirmed complete before proceeding. Step 3 (local server + browser preview) is NOT done here — it is executed in step 4 below, AFTER `app info` confirms `<projectDir>`.
 2. **Get project directory name**: Run `gemdesign app info` → compute `<projectDir> = {projectName}__{appuuid}` (remove illegal chars `\/:*?"<>|` from projectName, collapse whitespace to `_`)
 3. **Output current app info to user** (CRITICAL — user must know which app the page being modified belongs to):
    - Before modifying any HTML, clearly tell the user in your text response which app the target page belongs to. At minimum, output:
@@ -440,16 +505,25 @@ When user requests modifications:
    - **Type matching**: The `pageScene` value determines the page layout you MUST follow. Generate `web` (desktop, wide-screen) pages for `web` apps, `app` (mobile, narrow-screen) pages for `app` apps. Do NOT mix types - a web app cannot contain app pages, and vice versa.
    - This confirms to the user that the modification will land in the correct app, especially when multiple apps exist. If the user wanted a different app, they can interrupt here to switch via `gemdesign app use`.
    - **Pause-friendly**: This is informational only — no user reply is required unless the user wants to switch apps. Continue to the next step immediately after outputting.
-4. `gemdesign page list` -> find the target page
-5. `gemdesign page get --pageuuid <id> --file ./output/<projectDir>/<id>.html` -> retrieve HTML+DSL for editing
-6. Analyze HTML structure and interactions
-7. Modify HTML as needed
-   - For substantial modifications, use the **Streaming Write Workflow** (see above): create `<id>.stream.lock` → rewrite the HTML
-8. `gemdesign validate --file ./output/<projectDir>/<id>.html`
-9. Fix errors if any, re-validate (**do NOT delete `.stream.lock` until validation passes**)
-10. Delete `<id>.stream.lock` (only after validation passes — signals browser that streaming is complete)
+4. **Start the local server (Step 3)**: Now that the app exists and `<projectDir>` is computed, execute Step 3 (see the "Step 3: Start the Local Server" section above) — **必须先执行 `gemdesign server stop` 终止之前的服务**（无论应用是新建还是复用，也无论之前是否已运行服务，均不可跳过此步），**必须等 `server stop` 命令返回结果（确认已停止或无运行中的服务）之后**，才能执行 `gemdesign server start` 启动本地服务，并仅打开一次浏览器到设计器 `http://localhost:<port>/`。记录 `server start` 返回的 `<port>` 供后续步骤使用。这是 HARD GATE：服务未运行或浏览器预览未打开前，不得进入任何页面修改。
+   - **CRITICAL - 严禁跳过 `server stop` 这一步**：即使你认为当前会话中没有运行中的服务，也必须执行 `gemdesign server stop` 命令并以命令返回结果为准。禁止以"服务器已在运行"、"上一次 workflow 已启动"、"浏览器预览已打开"等理由跳过 stop。stop 返回 `{"success":false,"error":"未发现运行中的本地服务"}` 时表示无服务可停，此时可继续下一步 start。
+   - **CRITICAL - `server start` 必须等 `server stop` 执行完成后再执行**：禁止将 stop 和 start 并行执行、或先 start 后 stop。`server start` 的前置条件是 `server stop` 已返回结果。
+   - Never open the browser with a generated-page URL (e.g. `http://localhost:<port>/output/<projectDir>/<pageuuid>.html`) - that overwrites the designer with the generated HTML and destroys the preview surface.
+5. `gemdesign page list` -> find the target page
+6. `gemdesign page get --pageuuid <id> --file ./output/<projectDir>/<id>.html` -> retrieve HTML+DSL for editing
+7. Analyze HTML structure and interactions
+8. Modify HTML as needed
+   - For substantial modifications, use the **Streaming Write Workflow** (see above): rewrite the HTML
+9. `gemdesign validate --file ./output/<projectDir>/<id>.html`
+10. Fix errors if any, re-validate
 11. `gemdesign page save --pageuuid <id> --file ./output/<projectDir>/<id>.html`
 12. If requirement doc needs updating: `gemdesign page doc save --pageuuid <id> --file <updated-doc.md>`
+13. **Output designer link (MANDATORY - output ONCE, only after ALL page work is complete)**: After the page is modified, validated, and saved, you MUST output a clickable link in your text response so the user can easily open the designer to view the updated result. The link MUST be:
+    - **Name**: `gemdesign 设计器` (exact text, do NOT change or translate)
+    - **URL**: `http://localhost:<port>` (use the port recorded from Step 3's `server start` response)
+    - **Format** (markdown link): `[gemdesign 设计器](http://localhost:<port>)`
+    - Example: `[gemdesign 设计器](http://localhost:4056)`
+    > **CRITICAL - Output this link exactly ONCE, at the very end of the workflow.** Do NOT output it after each intermediate step. This is a text link for the user to click at their discretion, NOT an automatic browser open action. See Workflow A step 12 for the full rationale on why this does not conflict with Step 3's "do not output URLs in chat" rule.
 
 ---
 
@@ -463,7 +537,7 @@ Determine the design system type based on the `pageScene` field returned by `app
 
 | pageScene | Design System Type | Core Objective |
 |-----------|-------------------|----------------|
-| `app` | Mobile C-end experience-driven | Create a consumer-facing, experience-and-emotion-driven mobile app UI design system showcase page. Showcase common interaction patterns and visual components of C-end apps, emphasizing content consumption, social interaction, and personalized experience. The entire page is wrapped in a phone frame, simulating a real mobile app interface. |
+| `app` | Mobile C-end experience-driven | Create a consumer-facing, experience-and-emotion-driven mobile app UI design system showcase page. Showcase common interaction patterns and visual components of C-end apps, emphasizing content consumption, social interaction, and personalized experience. The page uses a mobile-width layout directly (no phone frame/外框 wrapper), presenting the mobile app interface as-is. |
 | `web` | Enterprise admin function-driven | Create a function-driven, enterprise/admin-management-oriented Web UI design system showcase page. Showcase common framework structures, data operations, and form input components of admin systems, emphasizing information density, operational efficiency, and status feedback. The page uses a full-width admin layout, simulating a real admin management system interface. |
 | Other | Flexible analysis | Analyze the most suitable design system type based on requirements, and design flexibly using the Header + Design Tokens + Components basic structure. |
 
