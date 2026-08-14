@@ -1,7 +1,7 @@
 ---
 name: gemdesign-skill
 description: Generate, save, and modify GemDesign prototype pages via CLI. Invoke when user wants to create UI prototypes, design pages, or batch-generate pages from requirements.
-version: 0.1.3
+version: 0.1.4
 license: MIT
 compatibility: [claude, codex, cursor, trae, hermes, openclaw, qoder, opencode , workbuddy, qclaw]
 ---
@@ -58,15 +58,15 @@ After this step is confirmed complete, the `gemdesign-ai` command is available g
 gemdesign auth whoami
 ```
 - If it succeeds (returns user info), the user is logged in — proceed to a Workflow (A/B/C). Step 3 (local server) will be executed INSIDE the workflow, after the app is created/reused.
-- If it fails (returns an error like "token 无效" or "未提供 token"), the user is NOT authenticated. You MUST:
-  1. Tell the user: if they don't have an account or token yet, go to **https://design.gemcoder.com** to register an account and get an API token. The token retrieval path is: log in to the platform -> click **个人中心** (Personal Center) -> get the **MCP 令牌** (MCP token).
-  2. Ask the user for their API token (use `AskUserQuestion` tool to prompt the user to input their token).
-  3. Once the user provides their token, **automatically run** the login command for them:
+- If it fails (returns an error like "GemDesign令牌 无效" or "未提供 GemDesign令牌"), the user is NOT authenticated. You MUST:
+  1. Tell the user: if they don't have an account or GemDesign令牌 yet, go to **https://design.gemcoder.com** to register an account and get a GemDesign令牌. The GemDesign令牌 retrieval path is: log in to the platform -> click **个人中心** (Personal Center) -> get the **GemDesign令牌** (GemDesign令牌).
+  2. Ask the user for their GemDesign令牌 (use `AskUserQuestion` tool to prompt the user to input their GemDesign令牌).
+  3. Once the user provides their GemDesign令牌, **automatically run** the login command for them:
      ```bash
      gemdesign auth login --token <user_provided_token>
      ```
   4. Re-verify with `gemdesign auth whoami` to confirm login succeeded.
-  5. If login still fails, repeat from step 2 (ask the user to provide their token again).
+  5. If login still fails, repeat from step 2 (ask the user to provide their GemDesign令牌 again).
   6. Only proceed to a Workflow after login is confirmed.
 
 **HARD GATE**: Until login is confirmed via `gemdesign auth whoami`, you MUST NOT perform ANY page-generation work — this includes CLI commands (`app`, `page`, `style`, `validate`) AND local file operations (writing `.html`, streaming write, creating the `./output/` directory). Local HTML generation is NOT a workaround for the login gate; a page can only be saved to the platform by an authenticated user, so generating it before login is wasted work. If login fails, stop and resolve authentication first — do not start writing any HTML.
@@ -200,7 +200,7 @@ gemdesign server cleanup                 # 清理空项目目录和遗留的流�
 
 ### Authentication
 ```bash
-gemdesign auth login --token <token>   # Configure API token
+gemdesign auth login --token <token>   # 配置 GemDesign 令牌
 gemdesign auth whoami                  # Verify identity
 ```
 
