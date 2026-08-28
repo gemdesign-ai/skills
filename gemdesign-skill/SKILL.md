@@ -1,7 +1,7 @@
 ---
 name: gemdesign-skill
 description: Generate, save, and modify GemDesign prototype pages via CLI. Invoke when user wants to create UI prototypes, design pages, or batch-generate pages from requirements.
-version: 0.1.9
+version: 0.1.10
 license: MIT
 compatibility: [claude, codex, cursor, trae, hermes, openclaw, qoder, opencode , workbuddy, qclaw]
 ---
@@ -232,35 +232,30 @@ gemdesign style get --id <styleId> --format html                 # Get full styl
 ### Page - View
 ```bash
 gemdesign page list [--appuuid <id>]                                        # List pages
-gemdesign page get --pageuuid <id> --file ./output/<projectDir>/<subfolder>/<id>.html  # Get page HTML (auto-creates projectDir)
-gemdesign page doc get --pageuuid <id> --file ./output/<projectDir>/<subfolder>/<id>.md  # Get requirement doc
+gemdesign page get --pageuuid <id> --file ./output/<projectDir>/<id>.html  # Get page HTML (auto-creates projectDir)
+gemdesign page doc get --pageuuid <id> --file ./output/<projectDir>/<id>.md  # Get requirement doc
 ```
-
-> **CRITICAL - 同步远程页面时必须保留文件夹结构**：`page list` 返回的每个页面包含 `dirName` 字段（远程所在文件夹，多级用 / 分隔，根级页面为 null/空）。将远程页面同步到本地（尤其是"同步后编辑"场景）时，`page get --file` 的 `<subfolder>` **必须与该页面的 `dirName` 一致**，即落盘到 `./output/<projectDir>/<dirName>/<pageuuid>.html`。严禁将所有页面统一放到项目根目录——否则后续编辑保存时本地推导的目录与远程不一致，可能导致页面脱离远程文件夹。例：`page list` 返回页面 `report-sales` 的 `dirName` 为 `reports`，则必须执行 `gemdesign page get --pageuuid report-sales --file ./output/<projectDir>/reports/report-sales.html`。
 
 ### Page - Create (streaming mode)
 ```bash
-gemdesign page create --pageuuid <readable-id> --name "<pageName>" --file ./output/<projectDir>/<subfolder>/<readable-id>.html   # Create page + enter streaming mode (.stream.lock written next to --file)
+gemdesign page create --pageuuid <readable-id> --name "<pageName>" --file ./output/<projectDir>/<readable-id>.html   # Create page + enter streaming mode (.stream.lock written next to --file)
 ```
 > `page create` signals the local server to start streaming mode for this page, enabling real-time HTML preview as you write to the `.html` file. This command should be called BEFORE writing the HTML file, and the streaming mode is automatically ended when `page save` completes.
->
-> **【CRITICAL - HTML 文件名必须等于 pageuuid】** `--file` 中的文件名部分必须与 `--pageuuid` 完全一致。例如 `--pageuuid customers-list` 必须搭配 `--file .../customers-list.html`。local-server 的 fileWatcher、streamPoller、pageCache 全部基于“文件名 = pageUuid”的假设工作。不一致会导致：lock 文件与 HTML 文件脱钩、前端流式状态异常、.meta.json 与远程 pageuuid 不匹配。`page create` 响应会在检测到不一致时发出 WARNING，务必按建议修正路径。
 
 ### Page - Save (with validation)
 ```bash
-gemdesign page save --pageuuid <id> --file ./output/<projectDir>/<subfolder>/<id>.html                                         # Update existing
-gemdesign page save --new --pageuuid <readable-id> --name "Login" --file ./output/<projectDir>/<subfolder>/<readable-id>.html  # Create new
-gemdesign page doc save --pageuuid <id> --file ./output/<projectDir>/<subfolder>/doc.md                                                           # Save requirement doc
+gemdesign page save --pageuuid <id> --file ./output/<projectDir>/<id>.html                                         # Update existing
+gemdesign page save --new --pageuuid <readable-id> --name "Login" --file ./output/<projectDir>/<readable-id>.html  # Create new
+gemdesign page doc save --pageuuid <id> --file ./doc.md                                                           # Save requirement doc
 ```
 > `page save` automatically validates the HTML against the GemDesign Page Spec before uploading. After a successful save, it automatically ends streaming mode, triggering the browser to fetch the final render.
 > `page doc save` saves an agent-generated requirement document to the platform.
 > **`--pageuuid` for `--new`**: Use a human-readable id (e.g. filename without `.html`). Ensure uniqueness within the app. This id is used directly as `data-uuid` in navigation elements - no need to change them after saving.
 > **Project subdirectory**: Always use `./output/<projectDir>/` in paths. The CLI is idempotent - if the path already contains `<projectDir>`, it won't duplicate it. See "Local File Management" for details.
-> **Folder organization**: Include the folder path directly in `--file` (e.g. `--file ./output/<projectDir>/crm/客户管理/page.html`). The CLI automatically derives the remote `dirName` from the file path.
 
 ### Validate Only
 ```bash
-gemdesign validate --file ./output/<projectDir>/<subfolder>/page.html    # Validate without saving
+gemdesign validate --file ./page.html    # Validate without saving
 ```
 
 ### Local File Management
@@ -269,17 +264,7 @@ For every page, save HTML files locally under `./output/`, organized by project 
 
 | File | Purpose | How to generate |
 |------|---------|-----------------|
-| `./output/<projectDir>/<subfolder>/<pageuuid>.html` | **Page HTML** (contains DSL, for editing and saving) | Written by the agent **only after `page create` has created the `.stream.lock`** (direct creation without the lock is FORBIDDEN; can include multi-level folder path in `<subfolder>`) |
-| `./output/<projectDir>/<subfolder>/<pageuuid>.meta.json` | **Page position metadata** (stores `{ position: { x, y } }` for canvas layout) | **CLI-managed exclusively** — auto-generated by `page get`; used by `page save` to read position. The agent MUST NEVER create or modify this file manually. Located in the **same directory** as the HTML file. |
-
-> **`.meta.json` follows the HTML file's directory**: The `.meta.json` file is always generated in the same directory as its corresponding `.html` file, regardless of folder depth. For example:
-> - `--file ./output/<projectDir>/page.html` → meta.json at `./output/<projectDir>/page.meta.json`
-> - `--file ./output/<projectDir>/crm/page.html` → meta.json at `./output/<projectDir>/crm/page.meta.json`
-> - `--file ./output/<projectDir>/crm/客户管理/page.html` → meta.json at `./output/<projectDir>/crm/客户管理/page.meta.json`
->
-> You MUST NOT manually create or modify `.meta.json` files — the CLI manages them exclusively (`page get` generates them, `page save` reads them). When `page save` is called, it reads the position from the `.meta.json` in the same directory as the HTML file (falling back to `--x`/`--y` flags if no meta.json exists).
-
-> **Directory consistency check (automatic)**: Before `page get` or `page save` writes any files, the CLI automatically scans the project directory to check if a same-name `.html` file already exists in a DIFFERENT directory than where `--file` points to. If a mismatch is detected (e.g., HTML exists in `customers/` but `--file` points to root), the CLI returns an error with a `suggestedFilePath` — **you MUST use the suggested path to re-execute the command**. This check runs BEFORE any file writes to prevent dirty data. If you receive this error, do NOT ignore it — re-run the command with the exact `suggestedFilePath` from the error response.
+| `./output/<projectDir>/<pageuuid>.html` | **Page HTML** (contains DSL, for editing and saving) | The file you generate and write |
 
 > **Project subdirectory naming**: `<projectDir> = {projectName}__{appuuid}`
 > - `projectName` comes from `app info` (illegal filesystem chars `\/:*?"<>|` removed, whitespace collapsed to `_`)
@@ -288,52 +273,18 @@ For every page, save HTML files locally under `./output/`, organized by project 
 > - **Directory creation**: This subdirectory is sync-created by `app create` under `htmlWorkdir` (requires `htmlWorkdir` configured first via `server workdir`); `page get`/`page save` also create it idempotently when writing files.
 >
 > **How to write files**:
-> - **Always use `./output/<projectDir>/<subfolder>/<pageuuid>.html`** in all file paths, whether writing files directly or passing to CLI commands. Include folder path in `<subfolder>` if needed (e.g. `./output/<projectDir>/crm/客户管理/page.html`). **HTML 文件名必须等于 pageuuid**（如 `--pageuuid customers-list` → 文件名必须是 `customers-list.html`，不能用 `list.html`）。
+> - **Always use `./output/<projectDir>/<pageuuid>.html`** in all file paths, whether writing files directly or passing to CLI commands.
 > - The CLI is **idempotent**: if the path already contains `<projectDir>`, it will NOT duplicate it. You can safely pass `./output/CRM系统__abc-123/home.html` to `page get --file` or `page save --file` without worrying about nesting.
 > - **Compute `<projectDir>` first**: Run `gemdesign app info` -> get `{appuuid}` and `{projectName}` -> compute `<projectDir> = {projectName}__{appuuid}` (sanitize projectName).
 > - **Validate `<projectDir>` before creating files**: Ensure `<projectDir>` is non-empty and matches `{nonEmptyName}__{nonEmptyUuid}`. If `projectName` or `appuuid` is empty/undefined, re-run `gemdesign app info`. Never create files with an empty or partial `<projectDir>` (e.g. `__abc` or `MyApp__`) - this creates orphaned unnamed directories.
 >
 > The local server automatically serves pages from the project subdirectory path.
 
-### Page Folder Organization
-
-Pages can be organized into sub-folders within the project directory. Simply include the folder path in `--file`:
-
-- **Root-level pages**: `--file ./output/<projectDir>/page.html` → placed in project root
-- **Sub-folder pages**: `--file ./output/<projectDir>/crm/page.html` → placed in `crm` sub-folder
-- **Multi-level folders**: `--file ./output/<projectDir>/crm/客户管理/page.html` → nested directory structure
-
-```bash
-# Single-level folder
-gemdesign page create --pageuuid customer-list --name "客户列表" --file ./output/<projectDir>/crm/customer-list.html
-gemdesign page save --new --pageuuid customer-list --name "客户列表" --file ./output/<projectDir>/crm/customer-list.html
-
-# Multi-level folder
-gemdesign page create --pageuuid customer-detail --name "客户详情" --file ./output/<projectDir>/crm/客户管理/customer-detail.html
-gemdesign page save --new --pageuuid customer-detail --name "客户详情" --file ./output/<projectDir>/crm/客户管理/customer-detail.html
-```
-
-> **When to use folders**: Use folders when the user describes organizing pages into modules/categories. For example, if the user says "put the customer pages under crm/客户", use `--file ./output/<projectDir>/crm/客户/page.html`.
-> **Folder names**: Illegal filesystem characters (`\/:*?"<>|`) are automatically cleaned. Folder names should be descriptive and human-readable.
-> **Local server**: The local server automatically recursively scans all sub-folders and displays them in a tree structure in the designer.
-> **Remote sync**: When `page save` is called, the CLI automatically derives the folder path from `--file` and sends it to the remote server as `dirName`. You do NOT need to specify any extra parameter — the CLI handles this transparently.
-
 ## Streaming Write Workflow (Real-time Display)
 
 When generating HTML pages, use the **streaming write workflow** to enable real-time display in the browser. The GemDesign local server watches for file changes and pushes incremental content to the browser via Server-Sent Events (SSE).
 
 > **CRITICAL — Do NOT open the browser again during streaming write (or at any point after Step 3).** The designer SPA (already open in the browser from Step 3) watches for `.html` file changes and auto-loads the generated HTML into its inner iframe via SSE. You do NOT need to "open" or "refresh" anything — just write the files and the designer updates itself in real time. Navigating the browser to the generated `.html` URL (e.g. via a preview tool or OS browser command with a page-specific URL) will OVERWRITE the designer with the generated HTML and break the preview surface. The only valid URL for opening the browser is the designer root `http://localhost:<port>/`, and even that should NOT be re-used after Step 3.
-
-> **HARD GATE — 本地文件生成后必须调用 `page save` 命令**：写入 HTML 文件后，**必须**调用 `gemdesign page save` 命令将页面保存到远程服务器。**严禁**只写入本地文件而跳过 `page save`——这会导致页面只存在于本地但不会出现在平台上，用户无法看到或使用该页面。完整流程为：`page create` → 写入 HTML → `page save`。`page save` 内置了规范验证，验证失败会返回错误，修复后重新执行 `page save` 即可。只写入本地文件而不调用 `page save` 是严重违规。
-
-> **注意：`page create` 的 JSON 响应中包含 `warning` 和 `requiredNextSteps` 字段，明确列出后续必须执行的步骤。你在收到该响应后，必须按照 `requiredNextSteps` 中的步骤依次执行，不可在写入 HTML 后停止。**
-
-> **HARD GATE — 严禁直接创建 `.html` 和 `.meta.json` 文件**：不允许智能体使用文件工具（Write/Edit 等）直接创建 `.html` 或 `.meta.json` 文件——这两类文件的创建**必须由 CLI 命令驱动**：
-> - **新建页面**：必须先执行 `gemdesign page create`（它会在 `--file` 同目录创建 `.stream.lock` 并进入流式模式），之后才允许写入 HTML。**没有 lock 就写入 HTML 文件是严重违规**——local-server 无法进入流式模式，实时预览失效，兜底保存也无法识别该页面尚未保存。
-> - **修改已有页面**：必须先执行 `gemdesign page get` 拉取 HTML（由 CLI 生成 `.html` 和 `.meta.json`），之后才允许修改。
-> - **`.meta.json` 为 CLI 专属文件**：由 `page get` 自动生成、由 `page save` 读取，**任何情况下智能体都严禁手动创建或修改 `.meta.json` 文件**。
->
-> **自检标准**：在写入任何 `.html` 之前，必须先存在该页面的 `.stream.lock`（新建，由 `page create` 创建）或 `page get` 的输出（修改已有页面）。违反该顺序（先写文件、后补命令，或完全跳过命令）都是严重违规。
 
 ### How It Works
 
@@ -345,20 +296,18 @@ The CLI automatically manages the streaming lifecycle for you. The `gemdesign pa
 
 ### Steps
 
-For each page you generate, follow this workflow. The workflow has **3 required steps** — `page create`, write HTML, and `page save`. You MUST complete all 3 steps for every page. **Stopping after writing HTML is a SERIOUS VIOLATION — the page will NOT appear on the platform.**
+For each page you generate, follow this workflow instead of writing the complete HTML in one shot:
 
 1. **Compute path**:
-   - `htmlPath = ./output/<projectDir>/<subfolder>/<pageuuid>.html` (include folder path in `<subfolder>`, or omit `<subfolder>` for root-level pages)
+   - `htmlPath = ./output/<projectDir>/<pageuuid>.html`
 
 2. **Create the page (enter streaming mode)**:
    ```bash
-   gemdesign page create --pageuuid <pageuuid> --name "<pageName>" --file ./output/<projectDir>/<subfolder>/<pageuuid>.html
+   gemdesign page create --pageuuid <pageuuid> --name "<pageName>" --file ./output/<projectDir>/<pageuuid>.html
    ```
    This signals the local server to start streaming mode for this page. The `.stream.lock` is written next to `--file`, so the lock and HTML share the same directory. The browser will enter streaming mode and prepare to receive incremental HTML.
-   > **The response contains `requiredNextSteps` — you MUST follow them.** After calling `page create`, you MUST write the HTML file and then call `page save`. Do NOT stop after writing HTML.
 
 3. **Write the HTML file** (append-only after the first write, NEVER overwrite with shorter content):
-   - **Precondition**: step 2's `page create` MUST have succeeded (the `.stream.lock` exists next to `--file`). NEVER create/write the HTML file without the lock — see the "严禁直接创建 `.html` 和 `.meta.json` 文件" HARD GATE above.
    - You may write the HTML in one shot or in multiple appends — the local server detects file changes and pushes each append to the browser in real-time.
    - The HTML must be a complete document: `<!DOCTYPE html>` + `<head>` (with all dependencies and styles) + `<body>...</body>` + `</html>`.
    - If writing in multiple appends, ensure the first write includes the `<body>` tag so the browser can start rendering immediately (the browser only renders after `<body>` appears).
@@ -370,44 +319,35 @@ For each page you generate, follow this workflow. The workflow has **3 required 
    > - **No delays or chunk-size limits**: Write as fast as you like, in any size. The local server pushes every file change to the browser within ~10ms.
    > - **Clean up on failure**: If streaming write fails or is interrupted, delete any partial `.html` file for that page. You can also run `gemdesign server cleanup` to clean up orphaned files and empty project directories.
 
-4. **(Optional) Validate the HTML** — only if you want early error detection before saving:
+4. **Validate the HTML**:
    ```bash
-   gemdesign validate --file ./output/<projectDir>/<subfolder>/<pageuuid>.html
+   gemdesign validate --file ./output/<projectDir>/<pageuuid>.html
    ```
-   If validation fails, fix the HTML and re-validate. Note: `page save` also validates internally — if validation fails during save, fix the HTML and re-run `page save`.
+   If validation fails, fix the HTML and re-validate. The browser continues to show the streaming state, giving immediate feedback on fixes.
 
-5. **Save to platform (MANDATORY — MUST call after writing HTML)**:
+5. **Save to platform**:
    ```bash
-   gemdesign page save --new --pageuuid <pageuuid> --name "<pageName>" --file ./output/<projectDir>/<subfolder>/<pageuuid>.html
+   gemdesign page save --new --pageuuid <pageuuid> --name "<pageName>" --file ./output/<projectDir>/<pageuuid>.html
    ```
-   `page save` **automatically validates the HTML before saving** — if validation fails, it returns an error; fix the HTML and re-run `page save`. When the save completes, the CLI automatically ends streaming mode. The browser fetches the complete HTML and switches to the final render.
-   > **This step is NON-NEGOTIABLE.** Writing HTML locally without calling `page save` means the page exists ONLY on your local machine and will NOT appear on the platform. The user will NOT see the page. This is the most common and serious mistake — do NOT make it.
-   >
-   > **CRITICAL — Call IMMEDIATELY after the page's HTML write completes; NEVER defer or batch**: The moment one page's HTML is fully written, you MUST call that page's `page save` right away — do NOT delay it until other pages are generated. `page save` is the ONLY action that deletes the `.stream.lock`, ends streaming mode, and syncs the page to the remote server. Deferring the save leaves the lock in place: the page stays stuck in streaming state, is never synced to the platform, and the browser canvas never triggers its final render. When generating multiple pages, see the "批量生成：逐页立即保存" HARD GATE below.
-
-> **HARD GATE — 批量生成时每页写完必须立即保存（允许并行，严禁攒批）**：生成多个页面时，可以并行推进多个页面的生成，但**每个页面的 HTML 一写完，就必须立即执行该页对应的后续命令**（`page save`，或先 `validate` 再 `page save`），确认 save 返回成功后该页才算完成。正确示例：`create(p1)` → 写 p1 → **立即** `save(p1)`；`create(p2)` → 写 p2 → **立即** `save(p2)`——各页之间互不等待。
->
-> **严禁**把所有页面的 `page save` 攒到最后统一执行（即等全部页面 HTML 都写完后再批量 `save(p1)…save(pN)` 是严重违规）。攒批保存的后果：每个页面的 `.stream.lock` 迟迟不被删除，页面一直处于流式状态、不同步到远程服务器，浏览器画布无法切换到最终渲染，用户体验为"所有页面都在加载中"直到整批结束。
->
-> **自检标准**：任何一个页面的 HTML 写完后，该页的下一个执行命令必须是它自己的 `page save`（或先 `validate` 再 `save`）——不得先去写别的页面的 HTML，更不得等到所有页面都写完才统一处理。并行场景下允许同时存在多个已 `create` 的页面，但不允许存在任何"HTML 已写完却迟迟未 save"的页面。
+   When the save completes, the CLI automatically ends streaming mode. The browser fetches the complete HTML and switches to the final render.
 
 ### Example (Streaming Write for a "home" page)
 
 ```bash
-# Step 1: Create the page (enter streaming mode)
+# 1. Create the page (enter streaming mode)
 gemdesign page create --pageuuid home --name "首页" --file ./output/MyApp__abc-123/home.html
-# → Response includes requiredNextSteps — you MUST follow them
 
-# Step 2: Write the HTML file (one shot or multiple appends)
-#    Use Write tool to create ./output/MyApp__abc-123/home.html with the complete HTML
+# 2. Write the HTML file (one shot or multiple appends — your choice)
+#    Use Write tool to create ./output/MyApp__abc-123/home.html with the complete HTML:
+#    <!DOCTYPE html><html><head>...<script src="tailwind"></script>...</head><body>...content...</body></html>
+#    Or write in multiple appends (ensure first write includes <body> tag).
 
-# Step 3 (OPTIONAL): Validate early to catch errors before saving
+# 3. Validate
 gemdesign validate --file ./output/MyApp__abc-123/home.html
-# If validation fails, fix and re-validate
+# Fix any validation errors and re-validate before proceeding
 
-# Step 4 (MANDATORY): Save to platform — MUST call, otherwise page won't appear
+# 4. Save to platform (automatically ends streaming mode)
 gemdesign page save --new --pageuuid home --name "首页" --file ./output/MyApp__abc-123/home.html
-# → page save also validates internally; if validation fails, fix HTML and re-run this command
 ```
 
 ## Workflows
@@ -457,20 +397,19 @@ gemdesign page save --new --pageuuid home --name "首页" --file ./output/MyApp_
 8. **Generate design system page (only for newly created apps)**: If a new app was created in step 2 (not reused), generate a design system page as the visual style baseline before generating business pages. All subsequent business pages should follow this style. Determine the design system type based on `pageScene` from `app info`, and generate the page following the type table and page structure in the dedicated **"Design System Page Spec"** section below. The pageuuid is fixed as `design-system` and is NOT counted as a business page. **You MUST save the design system page to the platform (not just write it locally) - otherwise it will not appear in the app and cannot serve as the style baseline.** Use the **Streaming Write Workflow** with these explicit steps (same create-validate-save process as business pages):
    - Create page (enter streaming mode): `gemdesign page create --pageuuid design-system --name "设计系统" --file ./output/<projectDir>/design-system.html`
    - Write the HTML file to `./output/<projectDir>/design-system.html` (follow the Design System Page Spec; pageuuid is `design-system`)
-   - **(Optional)** Validate: `gemdesign validate --file ./output/<projectDir>/design-system.html` (fix errors and re-validate)
+   - Validate: `gemdesign validate --file ./output/<projectDir>/design-system.html` (fix errors and re-validate)
    - **Save to platform (MANDATORY - do NOT skip)**: `gemdesign page save --new --pageuuid design-system --name "设计系统" --file ./output/<projectDir>/design-system.html` (uploads the design system page into the app so it persists on the platform and shows up in `page list`; automatically ends streaming mode)
    - Verify it was saved: `gemdesign page list` (confirm `design-system` appears in the list)
    If the app was reused (switched via `app use` in step 2), skip this step AND skip step 9.
 9. **Design System Review Gate (CRITICAL — only when step 8 generated a design system page)**: Before generating any business page, you MUST apply the **"Design System Review Gate"** rules (see that section below). Evaluate the continue conditions; if none apply, STOP and ask the user for confirmation/feedback on the design system using the format specified in that section. Do not proceed to step 10 until the design system is confirmed by the user or a continue condition is met. If the app was reused (step 8 was skipped), skip this step too.
 10. **For each page** (use **Streaming Write Workflow** above for real-time display):
-    - **HARD GATE — 每页写完立即 save，严禁攒批**：生成方式不限（串行或并行均可），但每个页面的 HTML 一写完，就必须立即执行该页的 `page save`（最多先 `validate` 再 `save`），以此删除 `.stream.lock`、结束流式状态并同步远程服务器，确认 save 成功后该页才算完成。**严禁**等所有页面的 HTML 都写完后再统一批量 `page save`（攒批会导致 lock 滞留、页面一直处于流式状态且不同步远程）。详见 Streaming Write Workflow 章节的"批量生成：逐页立即保存"HARD GATE。
     - Generate HTML following the Page Spec below (incorporate style if available). Use the assigned `pageuuid` as `data-uuid` in navigation elements. All business pages MUST follow the style baseline established (and, if applicable, confirmed) in the design system page.
-    - **Use streaming write** (3 required steps: create → write HTML → save, per page in sequence):
-      - `gemdesign page create --pageuuid <pageuuid> --name "页面名" --file ./output/<projectDir>/<subfolder>/<pageuuid>.html`
-      - Write the HTML file to the `--file` path (include folder in path if needed; create the directory if it doesn't exist)
-      - **(Optional)** `gemdesign validate --file ...` for early error detection
-      - **`gemdesign page save --new --pageuuid <pageuuid> --name "页面名" --file ./output/<projectDir>/<subfolder>/<pageuuid>.html`** — MANDATORY, page won't appear on platform without this step; call it IMMEDIATELY after this page's HTML is written, BEFORE touching the next page
-    - **CRITICAL**: `page save` is the most important step. Only writing HTML locally without calling `page save` means the page will NOT appear on the platform. `page save` validates internally — if validation fails, fix and re-run.
+    - **Use streaming write** (see "Streaming Write Workflow" section for details):
+      - Create page (enter streaming mode): `gemdesign page create --pageuuid <pageuuid> --name "页面名" --file ./output/<projectDir>/<pageuuid>.html`
+      - Write the HTML file to: `./output/<projectDir>/<pageuuid>.html` (create the directory if it doesn't exist; use the `<projectDir>` computed in step 3)
+      - Validate: `gemdesign validate --file ./output/<projectDir>/<pageuuid>.html`
+      - Fix any validation errors, re-validate
+      - Save to platform: `gemdesign page save --new --pageuuid <pageuuid> --name "页面名" --file ./output/<projectDir>/<pageuuid>.html` (uploads to platform, automatically ends streaming mode)
 11. **Verify**: `gemdesign page list`
 12. **Output designer link (MANDATORY - output ONCE, only after ALL pages are generated)**: After ALL pages in the batch are generated, validated, and saved (i.e., after step 10's loop is fully complete and step 11 verification passes), you MUST output a clickable link in your text response so the user can easily open the designer to view the final result. The link MUST be:
     - **Name**: `gemdesign 设计器` (exact text, do NOT change or translate)
@@ -520,19 +459,20 @@ When user asks for a page in conversation:
 6. **Generate design system page (only for newly created apps)**: If a new app was created in step 2 (not reused), generate a design system page as the visual style baseline before generating business pages. All subsequent business pages should follow this style. Determine the design system type based on `pageScene` from `app info`, and generate the page following the type table and page structure in the dedicated **"Design System Page Spec"** section below. The pageuuid is fixed as `design-system` and is NOT counted as a business page. **You MUST save the design system page to the platform (not just write it locally) - otherwise it will not appear in the app and cannot serve as the style baseline.** Use the **Streaming Write Workflow** with these explicit steps (same create-validate-save process as business pages):
    - Create page (enter streaming mode): `gemdesign page create --pageuuid design-system --name "设计系统" --file ./output/<projectDir>/design-system.html`
    - Write the HTML file to `./output/<projectDir>/design-system.html` (follow the Design System Page Spec; pageuuid is `design-system`)
-   - **(Optional)** Validate: `gemdesign validate --file ./output/<projectDir>/design-system.html` (fix errors and re-validate)
+   - Validate: `gemdesign validate --file ./output/<projectDir>/design-system.html` (fix errors and re-validate)
    - **Save to platform (MANDATORY - do NOT skip)**: `gemdesign page save --new --pageuuid design-system --name "设计系统" --file ./output/<projectDir>/design-system.html` (uploads the design system page into the app so it persists on the platform and shows up in `page list`; automatically ends streaming mode)
    - Verify it was saved: `gemdesign page list` (confirm `design-system` appears in the list)
    If the app was reused (switched via `app use` in step 2), skip this step AND skip step 7.
 7. **Design System Review Gate (CRITICAL — only when step 6 generated a design system page)**: Apply the **"Design System Review Gate"** rules (see that section below). If no continue condition applies, STOP and ask the user for confirmation/feedback before proceeding. Do not proceed to step 8 until the design system is confirmed or a continue condition is met. If the app was reused (step 6 was skipped), skip this step too.
 8. Determine a readable `pageuuid` (e.g. filename without `.html`, unique within the app)
 9. Generate HTML following the Page Spec, using `pageuuid` as `data-uuid` in navigation elements. Follow the style baseline established (and, if applicable, confirmed) in the design system page.
-10. **Use streaming write** (3 required steps: create → write HTML → save):
-    - `gemdesign page create --pageuuid <pageuuid> --name "<pageName>" --file ./output/<projectDir>/<subfolder>/<pageuuid>.html`
-    - Write the HTML file to the `--file` path (include folder in path if needed; create the directory if it doesn't exist)
-    - **(Optional)** `gemdesign validate --file ...` for early error detection
-    - **`gemdesign page save --new --pageuuid <pageuuid> --name "<pageName>" --file ./output/<projectDir>/<subfolder>/<pageuuid>.html`** — MANDATORY, page won't appear on platform without this step
-    - **CRITICAL**: Only writing HTML locally without calling `page save` means the page will NOT appear on the platform.
+10. **Use streaming write** (see "Streaming Write Workflow" section):
+    - Create page (enter streaming mode): `gemdesign page create --pageuuid <pageuuid> --name "<pageName>" --file ./output/<projectDir>/<pageuuid>.html`
+    - Write the HTML file to `./output/<projectDir>/<pageuuid>.html` (create the directory if it doesn't exist; use the `<projectDir>` computed in step 3)
+11. `gemdesign validate --file ./output/<projectDir>/<pageuuid>.html`
+12. Fix errors if any, re-validate
+13. `gemdesign page save --new --pageuuid <pageuuid> --name "<pageName>" --file ./output/<projectDir>/<pageuuid>.html`
+    (uploads to platform, automatically ends streaming mode)
 14. Describe the result to the user
 15. **Output designer link (MANDATORY - output ONCE, only after ALL page work is complete)**: After the page is generated, validated, and saved, you MUST output a clickable link in your text response so the user can easily open the designer. The link MUST be:
     - **Name**: `gemdesign 设计器` (exact text, do NOT change or translate)
@@ -542,12 +482,13 @@ When user asks for a page in conversation:
     > **CRITICAL - Output this link exactly ONCE, at the very end of the workflow.** Do NOT output it after each intermediate step. This is a text link for the user to click at their discretion, NOT an automatic browser open action. See Workflow A step 12 for the full rationale on why this does not conflict with Step 3's "do not output URLs in chat" rule.
 
 When user requests modifications:
-1. `gemdesign page get --pageuuid <id> --file ./output/<projectDir>/<subfolder>/<id>.html` to retrieve HTML+DSL for editing
+1. `gemdesign page get --pageuuid <id> --file ./output/<projectDir>/<id>.html` to retrieve HTML+DSL for editing
 2. Modify the HTML (adjust DOM, add/remove interaction DSL, update jsHandle)
    - For substantial modifications, use the **Streaming Write Workflow**: rewrite the HTML (delete the old file first if starting fresh, or append if only adding)
-3. **(Optional)** `gemdesign validate --file ./output/<projectDir>/<subfolder>/<id>.html` — fix errors if any
-4. `gemdesign page save --pageuuid <id> --file ./output/<projectDir>/<subfolder>/<id>.html` — MANDATORY
-5. If requirement doc needs updating: `gemdesign page doc save --pageuuid <id> --file ./output/<projectDir>/<subfolder>/updated-doc.md`
+3. `gemdesign validate --file ./output/<projectDir>/<id>.html`
+4. Fix errors if any, re-validate
+5. `gemdesign page save --pageuuid <id> --file ./output/<projectDir>/<id>.html`
+6. If requirement doc needs updating: `gemdesign page doc save --pageuuid <id> --file <updated-doc.md>`
 
 ### Workflow C: Modify Existing Page
 
@@ -575,14 +516,14 @@ When user requests modifications:
    - **CRITICAL - `server start` 必须等 `server stop` 执行完成后再执行**：禁止将 stop 和 start 并行执行、或先 start 后 stop。`server start` 的前置条件是 `server stop` 已返回结果。
    - Never open the browser with a generated-page URL (e.g. `http://localhost:<port>/output/<projectDir>/<pageuuid>.html`) - that overwrites the designer with the generated HTML and destroys the preview surface.
 5. `gemdesign page list` -> find the target page
-6. `gemdesign page get --pageuuid <id> --file ./output/<projectDir>/<subfolder>/<id>.html` -> retrieve HTML+DSL for editing
+6. `gemdesign page get --pageuuid <id> --file ./output/<projectDir>/<id>.html` -> retrieve HTML+DSL for editing
 7. Analyze HTML structure and interactions
 8. Modify HTML as needed
    - For substantial modifications, use the **Streaming Write Workflow** (see above): rewrite the HTML
-9. **(Optional) Validate**: `gemdesign validate --file ./output/<projectDir>/<subfolder>/<id>.html` — fix errors if any
-10. **Save to platform (MANDATORY)**: `gemdesign page save --pageuuid <id> --file ./output/<projectDir>/<subfolder>/<id>.html`
-    - **CRITICAL**: Only modifying local files without calling `page save` means changes will NOT sync to the platform. `page save` validates internally.
-12. If requirement doc needs updating: `gemdesign page doc save --pageuuid <id> --file ./output/<projectDir>/<subfolder>/updated-doc.md`
+9. `gemdesign validate --file ./output/<projectDir>/<id>.html`
+10. Fix errors if any, re-validate
+11. `gemdesign page save --pageuuid <id> --file ./output/<projectDir>/<id>.html`
+12. If requirement doc needs updating: `gemdesign page doc save --pageuuid <id> --file <updated-doc.md>`
 13. **Output designer link (MANDATORY - output ONCE, only after ALL page work is complete)**: After the page is modified, validated, and saved, you MUST output a clickable link in your text response so the user can easily open the designer to view the updated result. The link MUST be:
     - **Name**: `gemdesign 设计器` (exact text, do NOT change or translate)
     - **URL**: `http://localhost:<port>` (use the port recorded from Step 3's `server start` response)
@@ -947,12 +888,9 @@ The `gemdesign validate` command checks:
 
 ## Tips
 
-- **HARD GATE — 严禁直接创建 `.html` / `.meta.json` 文件**：新建页面必须先执行 `page create`（创建 `.stream.lock`）再写入 HTML，无 lock 直接创建 HTML 是严重违规；修改已有页面必须先 `page get`。`.meta.json` 由 CLI 专属管理（`page get` 生成、`page save` 读取），智能体严禁创建或修改。
-- **HARD GATE — `page save` 不可跳过**: 写入 HTML 文件后，**必须**调用 `gemdesign page save` 保存到平台。只生成本地文件而不调用 `page save` 是严重违规——页面不会出现在平台上，用户无法看到或使用该页面。完整流程：`page create` → 写入 HTML → `page save`。`page save` 内置了规范验证，验证失败会返回错误，修复后重新执行 `page save` 即可。
-- **HARD GATE — 批量生成逐页立即保存**: 生成多个页面时可以并行推进，但每个页面的 HTML 一写完，必须立即执行该页对应的 `page save`（删除 `.stream.lock`、结束流式、同步远程），确认成功后该页才算完成；严禁等所有页面都生成完再攒批统一 save——否则 lock 滞留、页面一直处于流式状态且不同步远程服务器。
-- `page create` 的响应包含 `requiredNextSteps` 字段，列出后续必须执行的步骤。收到该响应后必须按步骤执行，不可在写入 HTML 后停止。
-- `gemdesign validate` 是可选的早期错误检测工具——`page save` 内部已包含验证，但 `validate` 可以在保存前捕获错误
-- **Save HTML locally** for every page: `./output/<projectDir>/<pageuuid>.html` for editing and saving to the platform. Always compute `<projectDir> = {projectName}__{appuuid}` first via `gemdesign app info`. The CLI is idempotent - passing a path that already contains `<projectDir>` will not duplicate it.
+- Always validate before saving — `gemdesign validate` catches errors early
+- For batch generation, validate each page individually before saving
+- **Save HTML locally** for every page: `./output/<projectDir>/<pageuuid>.html` for editing and saving to the platform. Always compute `<projectDir> = {projectName}__{appuuid>` first via `gemdesign app info`. The CLI is idempotent - passing a path that already contains `<projectDir>` will not duplicate it.
 - When creating a new page, pass a readable `--pageuuid` (e.g. `home`, `login`) - use the same value as `data-uuid` in navigation elements, so you don't need to update them after saving
 - Use `gemdesign page get --file <path>` to retrieve editable HTML+DSL before modifying
 - The full page spec is available at `page-spec.md` in the CLI project directory
